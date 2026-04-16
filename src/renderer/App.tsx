@@ -3,6 +3,7 @@ import { AccountPage } from './pages/AccountPage';
 import { TransferPage } from './pages/TransferPage';
 import { SharePage } from './pages/SharePage';
 import { FileManagerPage } from './pages/FileManagerPage';
+import { MonitorPage } from './pages/MonitorPage';
 
 type PageType = 'account' | 'transfer' | 'share' | 'file' | 'monitor';
 
@@ -28,6 +29,7 @@ function App() {
       case 'file':
         return <FileManagerPage />;
       case 'monitor':
+        return <MonitorPage />;
       default:
         return (
           <div className="flex items-center justify-center h-full">
