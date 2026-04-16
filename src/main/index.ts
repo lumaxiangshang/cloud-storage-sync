@@ -1,22 +1,21 @@
 import { app, BrowserWindow, ipcMain } from 'electron';
 import * as path from 'path';
 import { browserManager } from './browser';
-import { taskManager } from './taskManager';
+import { driverManager } from './drivers';
+import { CloudStorageType } from '../shared/types';
 
 let mainWindow: BrowserWindow | null = null;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    width: 900,
+    height: 700,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false
-    },
-    icon: path.join(__dirname, '../../assets/icon.png')
+    }
   });
 
-  // 开发模式加载 Vite 开发服务器，生产模式加载构建文件
   if (process.env.NODE_ENV === 'development') {
     mainWindow.loadURL('http://localhost:3000');
     mainWindow.webContents.openDevTools();
@@ -28,6 +27,61 @@ function createWindow() {
     mainWindow = null;
   });
 }
+
+// ==================== IPC 处理 ====================
+
+// 登录网盘
+ipcMain.handle('driver:login', async (_, type: CloudStorageType) => {
+  try {
+    const driver = driverManager.getDriver(type);
+    await driver.login();
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : '登录失败' };
+  }
+});
+
+// 检查登录状态
+ipcMain.handle('driver:checkLogin', async (_, type: CloudStorageType) => {
+  const driver = driverManager.getDriver(type);
+  return await driver.isLoggedIn();
+});
+
+// 解析分享链接
+ipcMain.handle('driver:parseLink', async (_, type: CloudStorageType, url: string) => {
+  try {
+    const driver = driverManager.getDriver(type);
+    const info = await driver.parseShareLink(url);
+    return { success: true, data: info };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : '解析链接失败' };
+  }
+});
+
+// 转存文件
+ipcMain.handle('driver:saveToDisk', async (_, type: CloudStorageType, url: string) => {
+  try {
+    const driver = driverManager.getDriver(type);
+    const shareInfo = await driver.parseShareLink(url);
+    await driver.saveToMyDisk(shareInfo);
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : '转存失败' };
+  }
+});
+
+// 生成分享链接
+ipcMain.handle('driver:createShare', async (_, type: CloudStorageType, filePath: string) => {
+  try {
+    const driver = driverManager.getDriver(type);
+    const shareUrl = await driver.createShareLink(filePath);
+    return { success: true, data: shareUrl };
+  } catch (error) {
+    return { success: false, error: error instanceof Error ? error.message : '生成分享链接失败' };
+  }
+});
+
+// ==================== 应用生命周期 ====================
 
 app.whenReady().then(() => {
   createWindow();
@@ -41,22 +95,11 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', async () => {
   if (process.platform !== 'darwin') {
-    // 关闭浏览器
     await browserManager.close();
     app.quit();
   }
 });
 
 app.on('before-quit', async () => {
-  // 清理资源
   await browserManager.close();
-});
-
-// 安全：防止新窗口创建
-app.on('web-contents-created', (_event, contents) => {
-  contents.setWindowOpenHandler(({ url }) => {
-    // 可以在这里打开外部浏览器
-    console.log('Prevented new window:', url);
-    return { action: 'deny' };
-  });
 });
