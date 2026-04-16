@@ -53,9 +53,10 @@ app.on('before-quit', async () => {
 });
 
 // 安全：防止新窗口创建
-app.on('web-contents-created', (event, contents) => {
-  contents.on('new-window', (event, navigationUrl) => {
-    event.preventDefault();
+app.on('web-contents-created', (_event, contents) => {
+  contents.setWindowOpenHandler(({ url }) => {
     // 可以在这里打开外部浏览器
+    console.log('Prevented new window:', url);
+    return { action: 'deny' };
   });
 });

@@ -79,7 +79,7 @@ class TaskManager {
   }
 
   getTasks(): SyncTask[] {
-    return Array.from(this.tasks.values()).sort((a, b) => b.createdAt - a.createdAt);
+    return Array.from(this.tasks.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
   getTask(taskId: string): SyncTask | undefined {

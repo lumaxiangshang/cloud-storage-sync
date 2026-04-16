@@ -1,0 +1,4 @@
+allowBuilds:
+  '@playwright/browser-chromium': false
+  electron: false
+  esbuild: false

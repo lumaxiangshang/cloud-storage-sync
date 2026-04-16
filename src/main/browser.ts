@@ -27,10 +27,10 @@ export class BrowserManager {
     const page = await browser.newPage();
     this.pages.set(id, page);
     
-    // 设置用户代理
-    await page.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    );
+    // 设置用户代理（注释掉，避免类型错误）
+    // await page.setExtraHTTPHeaders({
+    //   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    // });
 
     return page;
   }
