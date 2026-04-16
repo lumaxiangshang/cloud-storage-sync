@@ -1,7 +1,23 @@
 import React, { useState } from 'react';
 import { CloudStorageType } from '../shared/types';
 
-const { ipcRenderer } = window.require('electron');
+// 安全获取 ipcRenderer
+let ipcRenderer: any;
+try {
+  ipcRenderer = window.require('electron').ipcRenderer;
+} catch (e) {
+  // 浏览器环境，使用 mock
+  ipcRenderer = {
+    invoke: async (channel: string, ...args: any[]) => {
+      console.log('Mock IPC call:', channel, args);
+      await new Promise(r => setTimeout(r, 1000));
+      if (channel === 'driver:login') return { success: true };
+      if (channel === 'driver:parseLink') return { success: true, data: { url: args[1], title: '测试文件' } };
+      if (channel === 'driver:saveToDisk') return { success: true };
+      return { success: true };
+    }
+  };
+}
 
 const storageOptions: { value: CloudStorageType; label: string; icon: string }[] = [
   { value: 'baidu', label: '百度网盘', icon: '🐼' },
