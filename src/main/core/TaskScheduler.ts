@@ -175,7 +175,7 @@ export class TaskScheduler {
   }
 
   getTasks(): TransferTask[] {
-    return Array.from(this.tasks.values()).sort((a, b) => b.createdAt - a.createdAt);
+    return Array.from(this.tasks.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
   getTasksByStatus(status: TaskStatus): TransferTask[] {

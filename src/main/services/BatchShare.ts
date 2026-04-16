@@ -117,7 +117,7 @@ export class BatchShareService {
   }
 
   getTasks(): ShareTask[] {
-    return Array.from(this.tasks.values()).sort((a, b) => b.createdAt - a.createdAt);
+    return Array.from(this.tasks.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
   deleteTask(taskId: string): boolean {
