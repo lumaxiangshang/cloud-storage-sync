@@ -1,7 +1,7 @@
 {
-  "name": "cloud-storage-sync",
-  "version": "1.0.0",
-  "description": "网盘转存工具 - 支持百度网盘、夸克网盘、迅雷网盘",
+  "name": "pantools",
+  "version": "2.0.0",
+  "description": "PanTools - 企业级网盘管理工具，支持批量转存、多账号管理、资源监控",
   "main": "dist/main/index.js",
   "scripts": {
     "dev": "concurrently \"npm run dev:main\" \"npm run dev:renderer\"",
@@ -24,13 +24,22 @@
   "license": "MIT",
   "dependencies": {
     "@playwright/browser-chromium": "^1.50.1",
+    "crypto-js": "^4.2.0",
+    "csv-parser": "^3.0.0",
     "electron-store": "^8.2.0",
+    "exceljs": "^4.4.0",
+    "p-queue": "^6.6.2",
     "playwright": "^1.50.1",
+    "uuid": "^10.0.0",
+    "winston": "^3.14.0",
+    "xlsx": "^0.18.5",
     "zustand": "^4.5.0"
   },
   "devDependencies": {
+    "@types/crypto-js": "^4.2.2",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
+    "@types/uuid": "^10.0.0",
     "@vitejs/plugin-react": "^4.3.3",
     "autoprefixer": "^10.4.20",
     "concurrently": "^8.2.2",
