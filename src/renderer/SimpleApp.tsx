@@ -1,23 +1,14 @@
 import React, { useState } from 'react';
 import { CloudStorageType } from '../shared/types';
 
-// 安全获取 ipcRenderer
-let ipcRenderer: any;
-try {
-  ipcRenderer = window.require('electron').ipcRenderer;
-} catch (e) {
-  // 浏览器环境，使用 mock
-  ipcRenderer = {
-    invoke: async (channel: string, ...args: any[]) => {
-      console.log('Mock IPC call:', channel, args);
-      await new Promise(r => setTimeout(r, 1000));
-      if (channel === 'driver:login') return { success: true };
-      if (channel === 'driver:parseLink') return { success: true, data: { url: args[1], title: '测试文件' } };
-      if (channel === 'driver:saveToDisk') return { success: true };
-      return { success: true };
-    }
-  };
-}
+// 安全获取 API
+const electronAPI = (window as any).electronAPI || {
+  login: async () => ({ success: true }),
+  checkLogin: async () => true,
+  parseLink: async () => ({ success: true, data: { title: '测试文件' } }),
+  saveToDisk: async () => ({ success: true }),
+  createShare: async () => ({ success: true, data: 'https://example.com/share' })
+};
 
 const storageOptions: { value: CloudStorageType; label: string; icon: string }[] = [
   { value: 'baidu', label: '百度网盘', icon: '🐼' },
@@ -36,7 +27,7 @@ const SimpleApp: React.FC = () => {
   const handleLogin = async () => {
     setMessage('正在打开浏览器...');
     
-    const result = await ipcRenderer.invoke('driver:login', selectedStorage);
+    const result = await electronAPI.login(selectedStorage);
     
     if (result.success) {
       setMessage('登录成功！');
@@ -57,14 +48,14 @@ const SimpleApp: React.FC = () => {
     try {
       // 1. 解析链接
       setMessage('正在解析分享链接...');
-      const parseResult = await ipcRenderer.invoke('driver:parseLink', selectedStorage, shareUrl);
+      const parseResult = await electronAPI.parseLink(selectedStorage, shareUrl);
       if (!parseResult.success) {
         throw new Error(parseResult.error);
       }
 
       // 2. 转存文件
       setMessage('正在转存文件...');
-      const saveResult = await ipcRenderer.invoke('driver:saveToDisk', selectedStorage, shareUrl);
+      const saveResult = await electronAPI.saveToDisk(selectedStorage, shareUrl);
       if (!saveResult.success) {
         throw new Error(saveResult.error);
       }
