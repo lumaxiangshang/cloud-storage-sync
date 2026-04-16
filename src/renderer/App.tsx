@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { AccountPage } from './pages/AccountPage';
 import { TransferPage } from './pages/TransferPage';
+import { SharePage } from './pages/SharePage';
+import { FileManagerPage } from './pages/FileManagerPage';
 
 type PageType = 'account' | 'transfer' | 'share' | 'file' | 'monitor';
 
@@ -22,7 +24,9 @@ function App() {
       case 'transfer':
         return <TransferPage />;
       case 'share':
+        return <SharePage />;
       case 'file':
+        return <FileManagerPage />;
       case 'monitor':
       default:
         return (
