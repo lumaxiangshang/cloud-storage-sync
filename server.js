@@ -727,6 +727,14 @@ app.get('/api/debug/page', async (req, res) => {
         title: node.getAttribute('title') || ''
       }))
     ).catch(() => []);
+    const candidates = await page.locator('[title], [aria-label], [class]').evaluateAll((nodes) =>
+      nodes.slice(0, 200).map((node) => ({
+        text: (node.textContent || '').trim().slice(0, 120),
+        title: node.getAttribute('title') || '',
+        ariaLabel: node.getAttribute('aria-label') || '',
+        cls: node.className || ''
+      })).filter((item) => item.text || item.title || item.ariaLabel)
+    ).catch(() => []);
 
     res.json({
       success: true,
@@ -735,7 +743,8 @@ app.get('/api/debug/page', async (req, res) => {
       title,
       visibleTexts,
       htmlSnippet,
-      buttons
+      buttons,
+      candidates
     });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
