@@ -191,6 +191,13 @@ function validateShareUrl(url, storageType) {
   return config.linkPatterns.some((pattern) => pattern.test(url));
 }
 
+function normalizeFileName(name = '') {
+  return String(name)
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 async function extractShareLink(page) {
   const urlCandidates = await page.locator('input, textarea, a, span, div').evaluateAll((nodes) => {
     const values = [];
@@ -202,6 +209,69 @@ async function extractShareLink(page) {
   }).catch(() => []);
 
   return urlCandidates.find((item) => /https?:\/\//i.test(item)) || '';
+}
+
+async function extractSharedFileName(page) {
+  const candidates = [
+    '[class*="filename"]',
+    '[class*="file-name"]',
+    '[class*="title"]',
+    'h1',
+    'h2',
+    '.name',
+    '.file-name'
+  ];
+
+  for (const selector of candidates) {
+    try {
+      const text = normalizeFileName(await page.locator(selector).first().textContent({ timeout: 1500 }));
+      if (text && !/保存到网盘|分享|下载|登录|夸克网盘/.test(text)) return text;
+    } catch {}
+  }
+
+  const title = normalizeFileName(await page.title().catch(() => ''));
+  if (title) return title.replace(/[-|_].*$/, '').trim();
+  return '';
+}
+
+async function locateFileInDrive(page, fileName) {
+  const normalized = normalizeFileName(fileName);
+  if (!normalized) return { found: false, reason: 'empty_name' };
+
+  const searchSelectors = [
+    'input[placeholder*="搜索"]',
+    'input[placeholder*="文件"]',
+    'input[type="search"]'
+  ];
+
+  for (const selector of searchSelectors) {
+    try {
+      const input = page.locator(selector).first();
+      await input.fill('');
+      await input.fill(normalized);
+      await page.keyboard.press('Enter').catch(() => {});
+      await page.waitForTimeout(2000);
+      break;
+    } catch {}
+  }
+
+  const rowSelectors = [
+    `text=${normalized}`,
+    `[title="${normalized.replace(/"/g, '\\"')}"]`,
+    `[aria-label*="${normalized.replace(/"/g, '\\"')}"]`
+  ];
+
+  for (const selector of rowSelectors) {
+    try {
+      const target = page.locator(selector).first();
+      await target.waitFor({ state: 'visible', timeout: 2000 });
+      await target.click({ timeout: 2000 });
+      await page.waitForTimeout(1200);
+      return { found: true, selector };
+    } catch {}
+  }
+
+  return { found: false, reason: 'file_not_found' };
 }
 
 async function tryShareFlow(page, config) {
@@ -334,6 +404,12 @@ app.post('/api/transfer', async (req, res) => {
     await page.goto(shareUrl, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(2000);
 
+    const detectedFileName = await extractSharedFileName(page);
+    if (detectedFileName) {
+      updateSession(sessionId, { targetFileName: detectedFileName });
+      appendLog(session, `识别到转存目标文件: ${detectedFileName}`);
+    }
+
     const clicked = await safeClick(page, config.saveButtons, 4000);
     if (!clicked) {
       updateSession(sessionId, {
@@ -405,6 +481,16 @@ app.post('/api/share', async (req, res) => {
     await page.goto(config.homeUrl, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(2500);
 
+    let located = { found: false, reason: 'missing_target_file' };
+    if (session.targetFileName) {
+      located = await locateFileInDrive(page, session.targetFileName);
+      appendLog(session, located.found
+        ? `已定位到目标文件: ${session.targetFileName}`
+        : `未定位到目标文件: ${session.targetFileName}`);
+    } else {
+      appendLog(session, '未拿到目标文件名，无法精确定位');
+    }
+
     const shareAttempt = await tryShareFlow(page, config);
     if (shareAttempt.shareClicked) appendLog(session, `已点击分享按钮: ${shareAttempt.shareClicked}`);
     if (shareAttempt.copyClicked) appendLog(session, `已点击复制链接按钮: ${shareAttempt.copyClicked}`);
@@ -424,10 +510,14 @@ app.post('/api/share', async (req, res) => {
       status: 'needs_manual_share',
       phase: 'share',
       message: shareAttempt.stage === 'share_button'
-        ? '没自动找到“分享”按钮，请在浏览器中选中文件并点分享，完成后点“提取分享链接”'
+        ? (located.found
+            ? '已定位到转存文件，但没自动找到“分享”按钮，请在浏览器中确认已选中文件后点分享，再回来点“提取分享链接”'
+            : '没精确定位到刚转存的文件，请在浏览器中手动找到该文件并点分享，完成后点“提取分享链接”')
         : '自动提取分享链接失败，请在浏览器中复制分享链接后点“提取分享链接”'
     });
-    appendLog(session, shareAttempt.stage === 'share_button' ? '未找到自动分享按钮，等待人工选择文件' : '自动提取分享链接失败，等待人工补一步');
+    appendLog(session, shareAttempt.stage === 'share_button'
+      ? (located.found ? '已定位文件，但分享按钮未出现，等待人工补一步' : '未定位到目标文件，等待人工补一步')
+      : '自动提取分享链接失败，等待人工补一步');
 
     res.json({ success: true, manual: true, session: ensureSession(sessionId) });
   } catch (error) {
