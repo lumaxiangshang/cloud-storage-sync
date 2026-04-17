@@ -212,7 +212,7 @@ async function extractShareLink(page) {
 }
 
 async function extractSharedFileName(page) {
-  const rejectPattern = /^(全部文件|最近|分享|下载|登录|夸克网盘|保存到网盘|首页|文件|更多|用户|我的网盘)$/;
+  const rejectPattern = /^(全部文件|最近|分享|下载|登录|夸克网盘|保存到网盘|首页|文件|更多|用户|我的网盘|夸克网盘分享)$/;
   const selectors = [
     '[class*="filename"]',
     '[class*="file-name"]',
@@ -239,12 +239,52 @@ async function extractSharedFileName(page) {
     } catch {}
   }
 
-  const title = normalizeFileName(await page.title().catch(() => ''));
-  if (title && !rejectPattern.test(title)) {
-    const cleaned = title.replace(/[-|_].*$/, '').trim();
-    if (cleaned && !rejectPattern.test(cleaned)) return cleaned;
-  }
   return '';
+}
+
+async function parseTransferSuccessContext(page, session) {
+  const openSelectors = [
+    'text=查看文件',
+    'text=打开目录',
+    'text=前往网盘',
+    'text=查看',
+    'button:has-text("查看文件")',
+    'button:has-text("前往网盘")'
+  ];
+
+  for (const selector of openSelectors) {
+    try {
+      const locator = page.locator(selector).first();
+      await locator.waitFor({ state: 'visible', timeout: 1500 });
+      appendLog(session, `发现成功页入口: ${selector}`);
+      return { found: true, selector };
+    } catch {}
+  }
+
+  appendLog(session, '未发现成功页入口');
+  return { found: false };
+}
+
+async function openTransferredTarget(page, session) {
+  const openSelectors = [
+    'text=查看文件',
+    'text=打开目录',
+    'text=前往网盘',
+    'text=查看',
+    'button:has-text("查看文件")',
+    'button:has-text("前往网盘")'
+  ];
+
+  for (const selector of openSelectors) {
+    try {
+      await page.locator(selector).first().click({ timeout: 1500 });
+      await page.waitForTimeout(2500);
+      appendLog(session, `已通过成功页入口跳转: ${selector}`);
+      return { opened: true, selector };
+    } catch {}
+  }
+
+  return { opened: false };
 }
 
 async function locateFileInDrive(page, fileName, session) {
@@ -430,6 +470,8 @@ app.post('/api/transfer', async (req, res) => {
     if (detectedFileName) {
       updateSession(sessionId, { targetFileName: detectedFileName });
       appendLog(session, `识别到转存目标文件: ${detectedFileName}`);
+    } else {
+      appendLog(session, '未稳定识别到目标文件名，后续优先依赖成功页入口');
     }
 
     const clicked = await safeClick(page, config.saveButtons, 4000);
@@ -450,13 +492,15 @@ app.post('/api/transfer', async (req, res) => {
     if (confirmed) appendLog(session, `已点击确认按钮: ${confirmed}`);
 
     await page.waitForTimeout(2500);
+    const transferContext = await parseTransferSuccessContext(page, session);
     updateSession(sessionId, {
       transferCompleted: true,
+      transferContext,
       status: 'transfer_done',
       phase: 'transfer',
-      message: '转存动作已执行，请确认浏览器里文件是否已进入你的网盘'
+      message: transferContext.found ? '转存完成，已识别到成功页入口，准备继续分享' : '转存动作已执行，请确认浏览器里文件是否已进入你的网盘'
     });
-    appendLog(session, '自动转存流程已完成，等待分享');
+    appendLog(session, transferContext.found ? '自动转存完成，并识别到成功页入口' : '自动转存流程已完成，等待分享');
 
     res.json({ success: true, manual: false, session: ensureSession(sessionId) });
   } catch (error) {
@@ -499,24 +543,39 @@ app.post('/api/share', async (req, res) => {
     });
     appendLog(session, '开始执行分享流程');
 
-    const page = await getOrCreatePage(sessionId);
-    appendLog(session, '准备进入我的网盘首页');
-    await page.goto(config.homeUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-    await page.waitForTimeout(2500);
-    appendLog(session, '已进入我的网盘首页');
+    const page = await getOrCreatePage(sessionId, 'sharePage');
+    let openedFromSuccessPage = { opened: false };
+
+    if (session.transferPage && !session.transferPage.isClosed()) {
+      appendLog(session, '优先尝试从转存成功页直接进入目标文件');
+      openedFromSuccessPage = await openTransferredTarget(session.transferPage, session);
+    }
+
+    if (!openedFromSuccessPage.opened) {
+      appendLog(session, '准备进入我的网盘首页');
+      await page.goto(config.homeUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+      await page.waitForTimeout(2500);
+      appendLog(session, '已进入我的网盘首页');
+    } else {
+      appendLog(session, '已从转存成功页进入后续页面');
+    }
 
     let located = { found: false, reason: 'missing_target_file' };
-    if (session.targetFileName) {
-      located = await locateFileInDrive(page, session.targetFileName, session);
-      appendLog(session, located.found
-        ? `已定位到目标文件: ${session.targetFileName}`
-        : `未定位到目标文件: ${session.targetFileName}`);
+    if (!openedFromSuccessPage.opened) {
+      if (session.targetFileName) {
+        located = await locateFileInDrive(page, session.targetFileName, session);
+        appendLog(session, located.found
+          ? `已定位到目标文件: ${session.targetFileName}`
+          : `未定位到目标文件: ${session.targetFileName}`);
+      } else {
+        appendLog(session, '未拿到目标文件名，无法精确定位');
+      }
     } else {
-      appendLog(session, '未拿到目标文件名，无法精确定位');
+      located = { found: true, reason: 'opened_from_success_page' };
     }
 
     appendLog(session, '开始尝试执行分享动作');
-    const shareAttempt = await tryShareFlow(page, config);
+    const shareAttempt = await tryShareFlow(openedFromSuccessPage.opened ? session.transferPage : page, config);
     if (shareAttempt.shareClicked) appendLog(session, `已点击分享按钮: ${shareAttempt.shareClicked}`);
     if (shareAttempt.copyClicked) appendLog(session, `已点击复制链接按钮: ${shareAttempt.copyClicked}`);
 
