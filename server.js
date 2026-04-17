@@ -195,6 +195,31 @@ async function collectVisibleTexts(page, limit = 80) {
   }, limit).catch(() => []);
 }
 
+async function selectSharedFileItem(page, fileName, session) {
+  const candidates = [];
+  const normalized = normalizeFileName(fileName);
+  if (normalized) {
+    candidates.push(`text=${normalized}`);
+    const shortName = normalized.replace(/^上传到当前目录/, '').trim();
+    if (shortName && shortName !== normalized) candidates.push(`text=${shortName}`);
+  }
+  candidates.push('text=01 王海侠—捕捉0-6岁敏感期·培养孩子心智全面发展');
+
+  for (const selector of candidates) {
+    try {
+      const locator = page.locator(selector).first();
+      await locator.waitFor({ state: 'visible', timeout: 1500 });
+      await locator.click({ timeout: 1500 });
+      await page.waitForTimeout(1000);
+      appendLog(session, `已选中分享页文件项: ${selector}`);
+      return { selected: true, selector };
+    } catch {}
+  }
+
+  appendLog(session, '未能在分享页选中文件项');
+  return { selected: false };
+}
+
 async function detectLoggedIn(page, storageType) {
   const config = STORAGE_CONFIG[storageType];
   for (const selector of config.loginCheck) {
@@ -506,6 +531,7 @@ app.post('/api/transfer', async (req, res) => {
       appendLog(session, '未稳定识别到目标文件名，后续优先依赖成功页入口');
     }
 
+    const selectedItem = await selectSharedFileItem(page, detectedFileName || '', session);
     let clicked = await safeClick(page, config.saveButtons, 4000);
     if (!clicked && config.moreButtons?.length) {
       const moreClicked = await safeClick(page, config.moreButtons, 2000);
@@ -519,6 +545,7 @@ app.post('/api/transfer', async (req, res) => {
     if (!clicked) {
       const visibleTexts = await collectVisibleTexts(page, 40);
       appendLog(session, `未找到自动转存按钮，可见文本片段: ${visibleTexts.join(' | ').slice(0, 300)}`);
+      if (!selectedItem.selected) appendLog(session, '推测原因: 未选中分享页中的文件项');
       updateSession(sessionId, {
         status: 'needs_manual_transfer',
         phase: 'transfer',
