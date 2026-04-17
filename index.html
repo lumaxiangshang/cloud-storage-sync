@@ -1,12 +1,309 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="zh-CN">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>网盘转存工具</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/renderer/main.tsx"></script>
-  </body>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PanTools - 网盘转存工具</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useEffect, useMemo, useState } = React;
+
+    const storageOptions = [
+      { value: 'baidu', label: '百度网盘', icon: '🐼', helpUrl: 'https://pan.baidu.com/' },
+      { value: 'quark', label: '夸克网盘', icon: '🚀', helpUrl: 'https://pan.quark.cn/' },
+      { value: 'xunlei', label: '迅雷网盘', icon: '⚡', helpUrl: 'https://pan.xunlei.com/' }
+    ];
+
+    const generateSessionId = () => 'session_' + Math.random().toString(36).slice(2, 11);
+
+    function App() {
+      const [step, setStep] = useState(1);
+      const [selectedStorage, setSelectedStorage] = useState('quark');
+      const [shareUrl, setShareUrl] = useState('');
+      const [resultUrl, setResultUrl] = useState('');
+      const [isProcessing, setIsProcessing] = useState(false);
+      const [message, setMessage] = useState('');
+      const [sessionId] = useState(generateSessionId());
+      const [status, setStatus] = useState(null);
+
+      const currentStorage = useMemo(
+        () => storageOptions.find(s => s.value === selectedStorage),
+        [selectedStorage]
+      );
+
+      const refreshStatus = async () => {
+        const response = await fetch(`/api/status?sessionId=${encodeURIComponent(sessionId)}`);
+        const data = await response.json();
+        if (data.success) {
+          setStatus(data.session);
+          setMessage(data.session.message || '');
+          if (data.session.isLoggedIn && step === 1) setStep(2);
+          if (data.session.transferCompleted && step < 3) setStep(3);
+          if (data.session.shareResult) {
+            setResultUrl(data.session.shareResult);
+            setStep(4);
+          }
+        }
+      };
+
+      useEffect(() => {
+        refreshStatus().catch(() => {});
+        const timer = setInterval(() => refreshStatus().catch(() => {}), 3000);
+        return () => clearInterval(timer);
+      }, []);
+
+      const postJson = async (url, body) => {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || '请求失败');
+        }
+        setStatus(data.session || null);
+        if (data.session?.message) setMessage(data.session.message);
+        return data;
+      };
+
+      const handleOpenLogin = async () => {
+        setIsProcessing(true);
+        try {
+          await postJson('/api/login', { storageType: selectedStorage, sessionId });
+        } catch (error) {
+          setMessage('错误: ' + error.message);
+        } finally {
+          setIsProcessing(false);
+        }
+      };
+
+      const checkLogin = async () => {
+        setIsProcessing(true);
+        try {
+          const data = await postJson('/api/check-login', { sessionId });
+          if (data.loggedIn) setStep(2);
+        } catch (error) {
+          setMessage('错误: ' + error.message);
+        } finally {
+          setIsProcessing(false);
+        }
+      };
+
+      const handleTransfer = async () => {
+        if (!shareUrl.trim()) return alert('请输入分享链接');
+        setIsProcessing(true);
+        try {
+          const data = await postJson('/api/transfer', {
+            shareUrl,
+            storageType: selectedStorage,
+            sessionId
+          });
+          if (!data.manual) setStep(3);
+        } catch (error) {
+          setMessage('错误: ' + error.message);
+        } finally {
+          setIsProcessing(false);
+        }
+      };
+
+      const confirmTransfer = async () => {
+        setIsProcessing(true);
+        try {
+          await postJson('/api/confirm-transfer', { sessionId });
+          setStep(3);
+        } catch (error) {
+          setMessage('错误: ' + error.message);
+        } finally {
+          setIsProcessing(false);
+        }
+      };
+
+      const handleGenerateShare = async () => {
+        setIsProcessing(true);
+        try {
+          const data = await postJson('/api/share', { sessionId, storageType: selectedStorage });
+          if (data.shareUrl) {
+            setResultUrl(data.shareUrl);
+            setStep(4);
+          }
+        } catch (error) {
+          setMessage('错误: ' + error.message);
+        } finally {
+          setIsProcessing(false);
+        }
+      };
+
+      const fetchShareLink = async () => {
+        setIsProcessing(true);
+        try {
+          const data = await postJson('/api/fetch-share-link', { sessionId });
+          setResultUrl(data.shareUrl);
+          setStep(4);
+        } catch (error) {
+          setMessage('错误: ' + error.message);
+        } finally {
+          setIsProcessing(false);
+        }
+      };
+
+      const copyResult = async () => {
+        if (!resultUrl) return;
+        await navigator.clipboard.writeText(resultUrl);
+        alert('链接已复制');
+      };
+
+      const reset = async () => {
+        try {
+          await postJson('/api/reset', { sessionId });
+        } catch {}
+        location.reload();
+      };
+
+      const statusBadge = status?.status || 'idle';
+      const logs = status?.logs || [];
+
+      return (
+        <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 p-8">
+          <div className="max-w-3xl mx-auto">
+            <div className="text-center mb-8">
+              <h1 className="text-4xl font-bold text-white mb-2">☁️ PanTools</h1>
+              <p className="text-purple-200">网盘转存并生成分享链接</p>
+            </div>
+
+            <div className="bg-white/10 border border-white/20 rounded-2xl p-4 mb-6 text-sm text-white/90">
+              <div className="flex flex-wrap items-center gap-3 justify-between">
+                <div>当前网盘: {currentStorage?.icon} {currentStorage?.label}</div>
+                <div className="px-3 py-1 rounded-full bg-purple-500/30 border border-purple-300/30">状态: {statusBadge}</div>
+              </div>
+              {message && <div className="mt-3 text-purple-100">{message}</div>}
+            </div>
+
+            <div className="flex justify-center mb-8">
+              {[1, 2, 3, 4].map((s) => (
+                <div key={s} className="flex items-center">
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-lg ${
+                    s < step ? 'bg-green-500 text-white' :
+                    s === step ? 'bg-purple-500 text-white' :
+                    'bg-gray-600 text-gray-300'
+                  }`}>
+                    {s < step ? '✓' : s}
+                  </div>
+                  {s < 4 && <div className={`w-12 h-1 ${s < step ? 'bg-green-500' : 'bg-gray-600'}`} />}
+                </div>
+              ))}
+            </div>
+
+            <div className="bg-white/10 backdrop-blur-lg rounded-2xl shadow-2xl p-8 border border-white/20 space-y-6">
+              {step === 1 && (
+                <>
+                  <h2 className="text-2xl font-semibold text-center text-white">先登录你的网盘</h2>
+                  <div className="grid grid-cols-3 gap-4">
+                    {storageOptions.map(opt => (
+                      <button
+                        key={opt.value}
+                        onClick={() => setSelectedStorage(opt.value)}
+                        className={`p-5 rounded-xl text-center transition-all ${
+                          selectedStorage === opt.value
+                            ? 'bg-purple-500/30 border-2 border-purple-400'
+                            : 'bg-white/5 border-2 border-white/10 hover:border-white/30'
+                        }`}
+                      >
+                        <div className="text-4xl mb-2">{opt.icon}</div>
+                        <div className="font-medium text-white">{opt.label}</div>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="p-4 bg-blue-500/20 rounded-xl border border-blue-400/30 text-blue-100 text-sm leading-7">
+                    1. 点“打开浏览器登录”<br />
+                    2. 在弹出的浏览器里完成登录<br />
+                    3. 点“检查是否已登录”，系统会继续后续步骤
+                  </div>
+                  <div className="flex gap-4">
+                    <button onClick={handleOpenLogin} disabled={isProcessing} className="flex-1 py-4 bg-purple-600 text-white rounded-xl hover:bg-purple-700 disabled:opacity-50 font-semibold">
+                      {isProcessing ? '处理中...' : '🖥️ 打开浏览器登录'}
+                    </button>
+                    <button onClick={checkLogin} disabled={isProcessing} className="flex-1 py-4 bg-green-600 text-white rounded-xl hover:bg-green-700 disabled:opacity-50 font-semibold">
+                      ✅ 检查是否已登录
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {step === 2 && (
+                <>
+                  <h2 className="text-2xl font-semibold text-center text-white">输入分享链接并转存</h2>
+                  <textarea
+                    value={shareUrl}
+                    onChange={(e) => setShareUrl(e.target.value)}
+                    className="w-full px-4 py-4 rounded-xl bg-white/10 border-2 border-white/20 text-white placeholder-gray-400 font-mono"
+                    rows={4}
+                    placeholder={`请输入 ${currentStorage?.label} 分享链接...`}
+                  />
+                  <div className="flex gap-4">
+                    <button onClick={() => setStep(1)} className="flex-1 py-3 border border-white/20 text-white rounded-xl hover:bg-white/10">上一步</button>
+                    <button onClick={handleTransfer} disabled={isProcessing || !shareUrl.trim()} className="flex-1 py-4 bg-purple-600 text-white rounded-xl hover:bg-purple-700 disabled:opacity-50 font-semibold">
+                      {isProcessing ? '处理中...' : '📦 开始转存'}
+                    </button>
+                  </div>
+                  <button onClick={confirmTransfer} disabled={isProcessing} className="w-full py-3 bg-amber-600 text-white rounded-xl hover:bg-amber-700 disabled:opacity-50">
+                    浏览器里已手动完成转存
+                  </button>
+                </>
+              )}
+
+              {step === 3 && (
+                <>
+                  <h2 className="text-2xl font-semibold text-center text-white">生成分享链接</h2>
+                  <div className="p-4 bg-green-500/20 rounded-xl border border-green-400/30 text-green-100 text-sm leading-7">
+                    系统会先尝试自动点分享。<br />
+                    如果没点到，你只需要在浏览器里选中文件后手动点“分享”，然后回来点“提取分享链接”。
+                  </div>
+                  <div className="flex gap-4">
+                    <button onClick={handleGenerateShare} disabled={isProcessing} className="flex-1 py-4 bg-purple-600 text-white rounded-xl hover:bg-purple-700 disabled:opacity-50 font-semibold">
+                      {isProcessing ? '处理中...' : '🔗 自动生成分享链接'}
+                    </button>
+                    <button onClick={fetchShareLink} disabled={isProcessing} className="flex-1 py-4 bg-green-600 text-white rounded-xl hover:bg-green-700 disabled:opacity-50 font-semibold">
+                      {isProcessing ? '提取中...' : '📋 提取分享链接'}
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {step === 4 && (
+                <>
+                  <h2 className="text-2xl font-semibold text-center text-white">转存完成</h2>
+                  <div className="p-4 bg-white/10 rounded-xl border border-white/20">
+                    <label className="block text-sm text-purple-200 mb-2">分享链接</label>
+                    <input value={resultUrl} readOnly className="w-full px-4 py-3 rounded-xl bg-slate-900/50 border border-white/10 text-white" />
+                  </div>
+                  <div className="flex gap-4">
+                    <button onClick={copyResult} className="flex-1 py-4 bg-green-600 text-white rounded-xl hover:bg-green-700 font-semibold">复制链接</button>
+                    <button onClick={reset} className="flex-1 py-4 border border-white/20 text-white rounded-xl hover:bg-white/10">重新开始</button>
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="mt-6 bg-black/20 border border-white/10 rounded-2xl p-4">
+              <div className="text-sm font-semibold text-white mb-3">运行日志</div>
+              <div className="space-y-2 text-xs text-gray-300 max-h-56 overflow-auto">
+                {logs.length ? logs.map((log, idx) => <div key={idx}>{log}</div>) : <div>暂无日志</div>}
+              </div>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
 </html>

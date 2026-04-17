@@ -11,7 +11,9 @@
     "build:main": "tsc -p tsconfig.main.json",
     "build:renderer": "vite build",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder"
+    "dist": "electron-builder",
+    "start": "node server.js",
+    "setup": "npx playwright install chromium"
   },
   "keywords": [
     "electron",
@@ -24,10 +26,12 @@
   "license": "MIT",
   "dependencies": {
     "@playwright/browser-chromium": "^1.50.1",
+    "cors": "^2.8.6",
     "crypto-js": "^4.2.0",
     "csv-parser": "^3.0.0",
     "electron-store": "^8.2.0",
     "exceljs": "^4.4.0",
+    "express": "^4.22.1",
     "p-queue": "^6.6.2",
     "playwright": "^1.50.1",
     "uuid": "^10.0.0",
