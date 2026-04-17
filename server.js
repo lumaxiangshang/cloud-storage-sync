@@ -247,9 +247,11 @@ async function extractSharedFileName(page) {
   return '';
 }
 
-async function locateFileInDrive(page, fileName) {
+async function locateFileInDrive(page, fileName, session) {
   const normalized = normalizeFileName(fileName);
   if (!normalized) return { found: false, reason: 'empty_name' };
+
+  appendLog(session, `开始定位网盘文件: ${normalized}`);
 
   const searchSelectors = [
     'input[placeholder*="搜索"]',
@@ -259,13 +261,17 @@ async function locateFileInDrive(page, fileName) {
 
   for (const selector of searchSelectors) {
     try {
+      appendLog(session, `尝试搜索框: ${selector}`);
       const input = page.locator(selector).first();
-      await input.fill('');
-      await input.fill(normalized);
+      await input.fill('', { timeout: 1500 });
+      await input.fill(normalized, { timeout: 1500 });
       await page.keyboard.press('Enter').catch(() => {});
       await page.waitForTimeout(2000);
+      appendLog(session, `已执行搜索: ${normalized}`);
       break;
-    } catch {}
+    } catch (error) {
+      appendLog(session, `搜索框不可用: ${selector}`);
+    }
   }
 
   const rowSelectors = [
@@ -276,12 +282,15 @@ async function locateFileInDrive(page, fileName) {
 
   for (const selector of rowSelectors) {
     try {
+      appendLog(session, `尝试定位文件节点: ${selector}`);
       const target = page.locator(selector).first();
       await target.waitFor({ state: 'visible', timeout: 2000 });
       await target.click({ timeout: 2000 });
       await page.waitForTimeout(1200);
       return { found: true, selector };
-    } catch {}
+    } catch {
+      appendLog(session, `未命中文件节点: ${selector}`);
+    }
   }
 
   return { found: false, reason: 'file_not_found' };
@@ -491,12 +500,14 @@ app.post('/api/share', async (req, res) => {
     appendLog(session, '开始执行分享流程');
 
     const page = await getOrCreatePage(sessionId);
-    await page.goto(config.homeUrl, { waitUntil: 'domcontentloaded' });
+    appendLog(session, '准备进入我的网盘首页');
+    await page.goto(config.homeUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
     await page.waitForTimeout(2500);
+    appendLog(session, '已进入我的网盘首页');
 
     let located = { found: false, reason: 'missing_target_file' };
     if (session.targetFileName) {
-      located = await locateFileInDrive(page, session.targetFileName);
+      located = await locateFileInDrive(page, session.targetFileName, session);
       appendLog(session, located.found
         ? `已定位到目标文件: ${session.targetFileName}`
         : `未定位到目标文件: ${session.targetFileName}`);
@@ -504,6 +515,7 @@ app.post('/api/share', async (req, res) => {
       appendLog(session, '未拿到目标文件名，无法精确定位');
     }
 
+    appendLog(session, '开始尝试执行分享动作');
     const shareAttempt = await tryShareFlow(page, config);
     if (shareAttempt.shareClicked) appendLog(session, `已点击分享按钮: ${shareAttempt.shareClicked}`);
     if (shareAttempt.copyClicked) appendLog(session, `已点击复制链接按钮: ${shareAttempt.copyClicked}`);
