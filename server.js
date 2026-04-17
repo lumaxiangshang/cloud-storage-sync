@@ -212,25 +212,38 @@ async function extractShareLink(page) {
 }
 
 async function extractSharedFileName(page) {
-  const candidates = [
+  const rejectPattern = /^(全部文件|最近|分享|下载|登录|夸克网盘|保存到网盘|首页|文件|更多|用户|我的网盘)$/;
+  const selectors = [
     '[class*="filename"]',
     '[class*="file-name"]',
-    '[class*="title"]',
+    '[class*="resource"] [class*="title"]',
+    '[class*="detail"] [class*="title"]',
+    '[class*="header"] [class*="title"]',
     'h1',
     'h2',
     '.name',
     '.file-name'
   ];
 
-  for (const selector of candidates) {
+  for (const selector of selectors) {
     try {
-      const text = normalizeFileName(await page.locator(selector).first().textContent({ timeout: 1500 }));
-      if (text && !/保存到网盘|分享|下载|登录|夸克网盘/.test(text)) return text;
+      const texts = await page.locator(selector).evaluateAll((nodes) =>
+        nodes.map((node) => (node.textContent || '').trim()).filter(Boolean)
+      );
+      for (const raw of texts) {
+        const text = normalizeFileName(raw);
+        if (!text || rejectPattern.test(text)) continue;
+        if (/保存到网盘|分享|下载|登录|夸克网盘/.test(text) && text.length < 12) continue;
+        return text;
+      }
     } catch {}
   }
 
   const title = normalizeFileName(await page.title().catch(() => ''));
-  if (title) return title.replace(/[-|_].*$/, '').trim();
+  if (title && !rejectPattern.test(title)) {
+    const cleaned = title.replace(/[-|_].*$/, '').trim();
+    if (cleaned && !rejectPattern.test(cleaned)) return cleaned;
+  }
   return '';
 }
 
