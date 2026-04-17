@@ -277,11 +277,23 @@ async function openTransferredTarget(page, session) {
 
   for (const selector of openSelectors) {
     try {
-      await page.locator(selector).first().click({ timeout: 1500 });
+      const beforeUrl = page.url();
+      const beforeTitle = await page.title().catch(() => '');
+      const locator = page.locator(selector).first();
+      await locator.click({ timeout: 1500 });
       await page.waitForTimeout(2500);
-      appendLog(session, `已通过成功页入口跳转: ${selector}`);
-      return { opened: true, selector };
-    } catch {}
+      const afterUrl = page.url();
+      const afterTitle = await page.title().catch(() => '');
+      const changed = beforeUrl !== afterUrl || beforeTitle !== afterTitle;
+      appendLog(session, `点击成功页入口后状态: selector=${selector}, urlChanged=${beforeUrl !== afterUrl}, titleChanged=${beforeTitle !== afterTitle}`);
+      if (changed) {
+        appendLog(session, `已通过成功页入口跳转: ${selector}`);
+        return { opened: true, selector, beforeUrl, afterUrl, beforeTitle, afterTitle };
+      }
+      appendLog(session, `成功页入口未触发有效跳转: ${selector}`);
+    } catch {
+      appendLog(session, `成功页入口点击失败: ${selector}`);
+    }
   }
 
   return { opened: false };
