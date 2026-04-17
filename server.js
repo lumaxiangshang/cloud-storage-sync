@@ -43,7 +43,17 @@ const STORAGE_CONFIG = {
       '[class*="avatar"]',
       '[class*="user"]'
     ],
-    saveButtons: ['text=保存到网盘', 'text=保存', 'button:has-text("转存")', 'button:has-text("存到网盘")'],
+    saveButtons: [
+      'text=保存到网盘',
+      'text=保存',
+      'text=转存',
+      'button:has-text("转存")',
+      'button:has-text("存到网盘")',
+      'button:has-text("立即保存")',
+      '[class*="save"]',
+      '[class*="transfer"]'
+    ],
+    moreButtons: ['text=更多', 'button:has-text("更多")', '[class*="more"]'],
     confirmButtons: ['text=确定', 'text=确认', 'button:has-text("保存")'],
     shareButtons: ['text=分享', 'button:has-text("分享")', 'button:has-text("立即分享")'],
     copyButtons: ['text=复制链接', 'text=复制', 'button:has-text("复制全部")'],
@@ -173,6 +183,16 @@ async function safeClick(page, selectors, timeout = 3000) {
     } catch {}
   }
   return null;
+}
+
+async function collectVisibleTexts(page, limit = 80) {
+  return page.locator('button, a, span, div').evaluateAll((nodes, max) => {
+    return nodes
+      .map((node) => (node.textContent || '').trim())
+      .filter(Boolean)
+      .filter((text, index, arr) => arr.indexOf(text) === index)
+      .slice(0, max);
+  }, limit).catch(() => []);
 }
 
 async function detectLoggedIn(page, storageType) {
@@ -486,8 +506,19 @@ app.post('/api/transfer', async (req, res) => {
       appendLog(session, '未稳定识别到目标文件名，后续优先依赖成功页入口');
     }
 
-    const clicked = await safeClick(page, config.saveButtons, 4000);
+    let clicked = await safeClick(page, config.saveButtons, 4000);
+    if (!clicked && config.moreButtons?.length) {
+      const moreClicked = await safeClick(page, config.moreButtons, 2000);
+      if (moreClicked) {
+        appendLog(session, `已点击更多操作: ${moreClicked}`);
+        await page.waitForTimeout(1200);
+        clicked = await safeClick(page, config.saveButtons, 3000);
+      }
+    }
+
     if (!clicked) {
+      const visibleTexts = await collectVisibleTexts(page, 40);
+      appendLog(session, `未找到自动转存按钮，可见文本片段: ${visibleTexts.join(' | ').slice(0, 300)}`);
       updateSession(sessionId, {
         status: 'needs_manual_transfer',
         phase: 'transfer',
