@@ -95,9 +95,10 @@ function updateSession(sessionId, patch) {
 }
 
 async function initBrowser() {
+  const headless = process.env.HEADLESS !== 'false';
   return chromium.launch({
-    headless: false,
-    slowMo: 150
+    headless,
+    slowMo: headless ? 0 : 150
   });
 }
 
@@ -443,6 +444,14 @@ app.post('/api/reset', async (req, res) => {
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught exception:', error);
+});
+
+process.on('unhandledRejection', (error) => {
+  console.error('Unhandled rejection:', error);
 });
 
 app.listen(PORT, () => {
