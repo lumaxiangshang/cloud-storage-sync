@@ -10,8 +10,11 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname)));
 
+const fs = require('fs');
+
 const browserContexts = new Map();
 const sessions = new Map();
+const SESSION_STORE_PATH = path.join(__dirname, 'runtime-sessions.json');
 
 const STORAGE_CONFIG = {
   baidu: {
@@ -63,6 +66,37 @@ const STORAGE_CONFIG = {
   }
 };
 
+function sanitizeSession(session) {
+  const copy = { ...session };
+  delete copy.mainPage;
+  delete copy.transferPage;
+  return copy;
+}
+
+function persistSessions() {
+  try {
+    const data = Object.fromEntries(
+      Array.from(sessions.entries()).map(([key, value]) => [key, sanitizeSession(value)])
+    );
+    fs.writeFileSync(SESSION_STORE_PATH, JSON.stringify(data, null, 2));
+  } catch (error) {
+    console.error('Persist sessions failed:', error.message);
+  }
+}
+
+function loadPersistedSessions() {
+  try {
+    if (!fs.existsSync(SESSION_STORE_PATH)) return;
+    const raw = fs.readFileSync(SESSION_STORE_PATH, 'utf8');
+    const parsed = JSON.parse(raw || '{}');
+    for (const [key, value] of Object.entries(parsed)) {
+      sessions.set(key, value);
+    }
+  } catch (error) {
+    console.error('Load sessions failed:', error.message);
+  }
+}
+
 function ensureSession(sessionId) {
   if (!sessions.has(sessionId)) {
     sessions.set(sessionId, {
@@ -77,6 +111,7 @@ function ensureSession(sessionId) {
       lastUpdatedAt: Date.now(),
       logs: []
     });
+    persistSessions();
   }
   return sessions.get(sessionId);
 }
@@ -86,11 +121,13 @@ function appendLog(session, message) {
   session.logs.push(`[${new Date().toLocaleTimeString('zh-CN', { hour12: false })}] ${message}`);
   if (session.logs.length > 50) session.logs = session.logs.slice(-50);
   session.lastUpdatedAt = Date.now();
+  persistSessions();
 }
 
 function updateSession(sessionId, patch) {
   const session = ensureSession(sessionId);
   Object.assign(session, patch, { lastUpdatedAt: Date.now() });
+  persistSessions();
   return session;
 }
 
@@ -155,16 +192,27 @@ function validateShareUrl(url, storageType) {
 }
 
 async function extractShareLink(page) {
-  const urlCandidates = await page.locator('input, textarea, a').evaluateAll((nodes) => {
+  const urlCandidates = await page.locator('input, textarea, a, span, div').evaluateAll((nodes) => {
     const values = [];
     for (const node of nodes) {
       const val = node.value || node.href || node.textContent || '';
-      if (/https?:\/\//i.test(val)) values.push(val.trim());
+      if (/https?:\/\//i.test(val)) values.push(String(val).trim());
     }
     return values;
   }).catch(() => []);
 
   return urlCandidates.find((item) => /https?:\/\//i.test(item)) || '';
+}
+
+async function tryShareFlow(page, config) {
+  const shareClicked = await safeClick(page, config.shareButtons, 2500);
+  if (!shareClicked) return { ok: false, stage: 'share_button' };
+
+  await page.waitForTimeout(2000);
+  await safeClick(page, ['text=全部', 'text=公开', 'text=创建链接', 'button:has-text("创建分享")'], 1500);
+  const copyClicked = await safeClick(page, config.copyButtons, 2500);
+  const shareResult = await extractShareLink(page);
+  return { ok: Boolean(shareResult), shareClicked, copyClicked, shareResult };
 }
 
 app.get('/api/status', async (req, res) => {
@@ -357,41 +405,29 @@ app.post('/api/share', async (req, res) => {
     await page.goto(config.homeUrl, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(2500);
 
-    const shareClicked = await safeClick(page, config.shareButtons, 2500);
-    if (!shareClicked) {
+    const shareAttempt = await tryShareFlow(page, config);
+    if (shareAttempt.shareClicked) appendLog(session, `已点击分享按钮: ${shareAttempt.shareClicked}`);
+    if (shareAttempt.copyClicked) appendLog(session, `已点击复制链接按钮: ${shareAttempt.copyClicked}`);
+
+    if (shareAttempt.ok) {
       updateSession(sessionId, {
-        status: 'needs_manual_share',
-        phase: 'share',
-        message: '没自动找到“分享”按钮，请在浏览器中选中文件并点分享，完成后点“提取分享链接”'
-      });
-      appendLog(session, '未找到自动分享按钮，等待人工选择文件');
-      return res.json({ success: true, manual: true, session: ensureSession(sessionId) });
-    }
-
-    appendLog(session, `已点击分享按钮: ${shareClicked}`);
-    await page.waitForTimeout(2000);
-
-    const copyClicked = await safeClick(page, config.copyButtons, 2500);
-    if (copyClicked) appendLog(session, `已点击复制链接按钮: ${copyClicked}`);
-
-    const shareResult = await extractShareLink(page);
-    if (shareResult) {
-      updateSession(sessionId, {
-        shareResult,
+        shareResult: shareAttempt.shareResult,
         status: 'done',
         phase: 'done',
         message: '分享链接已生成'
       });
-      appendLog(session, `已提取分享链接: ${shareResult}`);
-      return res.json({ success: true, manual: false, shareUrl: shareResult, session: ensureSession(sessionId) });
+      appendLog(session, `已提取分享链接: ${shareAttempt.shareResult}`);
+      return res.json({ success: true, manual: false, shareUrl: shareAttempt.shareResult, session: ensureSession(sessionId) });
     }
 
     updateSession(sessionId, {
       status: 'needs_manual_share',
       phase: 'share',
-      message: '自动提取分享链接失败，请在浏览器中复制分享链接后点“提取分享链接”'
+      message: shareAttempt.stage === 'share_button'
+        ? '没自动找到“分享”按钮，请在浏览器中选中文件并点分享，完成后点“提取分享链接”'
+        : '自动提取分享链接失败，请在浏览器中复制分享链接后点“提取分享链接”'
     });
-    appendLog(session, '自动提取分享链接失败，等待人工补一步');
+    appendLog(session, shareAttempt.stage === 'share_button' ? '未找到自动分享按钮，等待人工选择文件' : '自动提取分享链接失败，等待人工补一步');
 
     res.json({ success: true, manual: true, session: ensureSession(sessionId) });
   } catch (error) {
@@ -453,6 +489,8 @@ process.on('uncaughtException', (error) => {
 process.on('unhandledRejection', (error) => {
   console.error('Unhandled rejection:', error);
 });
+
+loadPersistedSessions();
 
 app.listen(PORT, () => {
   console.log(`

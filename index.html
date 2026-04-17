@@ -263,8 +263,9 @@
                 <>
                   <h2 className="text-2xl font-semibold text-center text-white">生成分享链接</h2>
                   <div className="p-4 bg-green-500/20 rounded-xl border border-green-400/30 text-green-100 text-sm leading-7">
-                    系统会先尝试自动点分享。<br />
-                    如果没点到，你只需要在浏览器里选中文件后手动点“分享”，然后回来点“提取分享链接”。
+                    系统会先尝试自动点分享并自动提取链接。<br />
+                    如果没点到，你只需要在浏览器里选中文件后手动点“分享”，然后回来点“提取分享链接”。<br />
+                    即使服务重启，最近一次任务状态也会保存在本地，不会直接丢失。
                   </div>
                   <div className="flex gap-4">
                     <button onClick={handleGenerateShare} disabled={isProcessing} className="flex-1 py-4 bg-purple-600 text-white rounded-xl hover:bg-purple-700 disabled:opacity-50 font-semibold">
