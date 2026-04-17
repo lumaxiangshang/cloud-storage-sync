@@ -679,6 +679,42 @@ app.post('/api/fetch-share-link', async (req, res) => {
   }
 });
 
+app.get('/api/debug/page', async (req, res) => {
+  try {
+    const { sessionId, pageKey = 'mainPage' } = req.query;
+    const session = ensureSession(sessionId);
+    const page = session[pageKey];
+    if (!page || page.isClosed()) {
+      return res.status(400).json({ success: false, error: `页面不存在: ${pageKey}` });
+    }
+
+    const url = page.url();
+    const title = await page.title().catch(() => '');
+    const visibleTexts = await collectVisibleTexts(page, 120);
+    const htmlSnippet = await page.locator('body').evaluate((el) => el.innerText.slice(0, 4000)).catch(() => '');
+    const buttons = await page.locator('button, a, [role="button"]').evaluateAll((nodes) =>
+      nodes.slice(0, 80).map((node) => ({
+        text: (node.textContent || '').trim(),
+        cls: node.className || '',
+        role: node.getAttribute('role') || '',
+        title: node.getAttribute('title') || ''
+      }))
+    ).catch(() => []);
+
+    res.json({
+      success: true,
+      pageKey,
+      url,
+      title,
+      visibleTexts,
+      htmlSnippet,
+      buttons
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 app.post('/api/reset', async (req, res) => {
   try {
     const { sessionId } = req.body;
@@ -689,6 +725,7 @@ app.post('/api/reset', async (req, res) => {
       await bundle.browser.close().catch(() => {});
       browserContexts.delete(sessionId);
     }
+    persistSessions();
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
