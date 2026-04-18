@@ -20,10 +20,9 @@ if [ ! -d "node_modules" ] || [ ! -d "node_modules/express" ]; then
 fi
 
 echo "🌐 检查 Playwright Chromium..."
-PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=${PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD:-1}
-export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
+unset PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
 if command -v npx >/dev/null 2>&1; then
-  timeout 20s npx playwright install chromium >/tmp/pantools-playwright.log 2>&1 || true
+  timeout 120s npx playwright install chromium >/tmp/pantools-playwright.log 2>&1 || true
 fi
 
 echo "🧹 清理旧的本地服务进程..."
@@ -48,5 +47,10 @@ else
   cat /tmp/pantools-playwright.log 2>/dev/null || true
   echo "--- server log ---"
   cat pantools.log 2>/dev/null || true
+  if grep -q "Executable doesn't exist" pantools.log 2>/dev/null; then
+    echo ""
+    echo "⚠️ Playwright 浏览器未安装成功，请手动执行："
+    echo "   npx playwright install chromium"
+  fi
   exit 1
 fi
