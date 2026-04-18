@@ -291,27 +291,38 @@ function diffEvidence(before, after) {
 }
 
 async function selectSharedFileItem(page, fileName, session) {
-  const candidates = [];
-  const normalized = normalizeFileName(fileName);
-  if (normalized) {
-    candidates.push(`text=${normalized}`);
-    const shortName = normalized.replace(/^上传到当前目录/, '').trim();
-    if (shortName && shortName !== normalized) candidates.push(`text=${shortName}`);
-  }
-  candidates.push('text=01 王海侠—捕捉0-6岁敏感期·培养孩子心智全面发展');
+  const normalized = normalizeFileName(fileName).replace(/^上传到当前目录/, '').trim();
 
-  for (const selector of candidates) {
-    try {
-      const locator = page.locator(selector).first();
-      await locator.waitFor({ state: 'visible', timeout: 1500 });
-      await locator.click({ timeout: 1500 });
-      await page.waitForTimeout(1000);
-      appendLog(session, `已选中分享页文件项: ${selector}`);
-      return { selected: true, selector };
-    } catch {}
+  const checkboxResult = await page.evaluate((name) => {
+    const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+    const rows = Array.from(document.querySelectorAll('tr, li, div'));
+    const row = rows.find((node) => {
+      const text = norm(node.textContent);
+      return text && name && text.includes(name);
+    });
+    if (!row) return null;
+
+    const checkbox = row.querySelector('input[type="checkbox"]') || row.querySelector('[role="checkbox"]');
+    if (checkbox) {
+      checkbox.click();
+      return { method: 'checkbox', text: norm(row.textContent).slice(0, 80) };
+    }
+
+    const rect = row.getBoundingClientRect();
+    const clickX = rect.left + 18;
+    const clickY = rect.top + rect.height / 2;
+    const el = document.elementFromPoint(clickX, clickY);
+    if (el) el.click();
+    return { method: 'row-left', text: norm(row.textContent).slice(0, 80) };
+  }, normalized).catch(() => null);
+
+  if (checkboxResult) {
+    await page.waitForTimeout(800);
+    appendLog(session, `已按外部列表勾选分享项: ${checkboxResult.method} -> ${checkboxResult.text}`);
+    return { selected: true, selector: checkboxResult.text, method: checkboxResult.method };
   }
 
-  appendLog(session, '未能在分享页选中文件项');
+  appendLog(session, '未能在外部列表勾选分享项');
   return { selected: false };
 }
 
@@ -566,18 +577,15 @@ async function detectQuarkSaveControls(page, session) {
 }
 
 async function chooseQuarkTransferTarget(page, session, folderName = DEFAULT_TARGET_FOLDER_NAME) {
-  appendLog(session, `准备在分享页指定转存目录: ${folderName}`);
+  appendLog(session, `准备在分享页底部“转存至”区域指定目录: ${folderName}`);
 
   const pickerInfo = await page.evaluate((folderName) => {
     const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
     const nodes = Array.from(document.querySelectorAll('div, span, p, button'));
-    const field = nodes.find((node) => {
-      const text = norm(node.textContent);
-      return text.startsWith('转存至：');
-    });
+    const field = nodes.find((node) => norm(node.textContent).startsWith('转存至'));
     if (!field) return null;
     const rect = field.getBoundingClientRect();
-    const clickX = rect.right - 18;
+    const clickX = rect.right - 20;
     const clickY = rect.top + rect.height / 2;
     const el = document.elementFromPoint(clickX, clickY);
     if (el) el.click();
@@ -585,30 +593,21 @@ async function chooseQuarkTransferTarget(page, session, folderName = DEFAULT_TAR
       text: norm(field.textContent),
       x: clickX,
       y: clickY,
-      width: rect.width,
-      height: rect.height,
       containsFolder: norm(field.textContent).includes(folderName)
     };
   }, folderName).catch(() => null);
 
   if (pickerInfo) {
-    appendLog(session, `已点击转存目录区域: text=${pickerInfo.text}, containsFolder=${pickerInfo.containsFolder}, x=${Math.round(pickerInfo.x)}, y=${Math.round(pickerInfo.y)}`);
+    appendLog(session, `已点击底部转存至区域: ${pickerInfo.text}`);
     await page.waitForTimeout(1200);
   }
 
-  const folderTextClicked = await safeClickByText(page, [folderName], session, { exact: false, maxTextLength: 20, preferLast: true });
-  if (folderTextClicked) {
-    await page.waitForTimeout(1000);
-    appendLog(session, `已通过文本点击目标目录: ${folderName}`);
-    return { ok: true, folderName, selector: folderTextClicked, pickerInfo };
-  }
-
-  const folderNodeClicked = await page.evaluate((folderName) => {
+  const folderPicked = await page.evaluate((folderName) => {
     const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
-    const nodes = Array.from(document.querySelectorAll('div, span, p, button'));
+    const nodes = Array.from(document.querySelectorAll('div, span, p, li, button'));
     const target = nodes.find((node) => {
       const text = norm(node.textContent);
-      return text === folderName || text.endsWith(folderName);
+      return text === folderName || text.endsWith('/' + folderName) || text.includes(folderName);
     });
     if (!target) return null;
     const rect = target.getBoundingClientRect();
@@ -619,13 +618,13 @@ async function chooseQuarkTransferTarget(page, session, folderName = DEFAULT_TAR
     return { text: norm(target.textContent), x, y };
   }, folderName).catch(() => null);
 
-  if (folderNodeClicked) {
-    appendLog(session, `已通过节点定位点击目标目录: ${folderNodeClicked.text}`);
+  if (folderPicked) {
     await page.waitForTimeout(1000);
-    return { ok: true, folderName, selector: folderNodeClicked.text, pickerInfo };
+    appendLog(session, `已在转存目录选择中命中: ${folderPicked.text}`);
+    return { ok: true, folderName, selector: folderPicked.text, pickerInfo };
   }
 
-  appendLog(session, `未能在转存弹层中选中目标目录: ${folderName}`);
+  appendLog(session, `未能在转存目录选择中命中: ${folderName}`);
   return { ok: false, folderName, reason: 'target_folder_not_selected', pickerInfo };
 }
 
