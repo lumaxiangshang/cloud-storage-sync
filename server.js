@@ -563,22 +563,48 @@ async function detectQuarkSaveControls(page, session) {
   return controls;
 }
 
+async function chooseQuarkTransferTarget(page, session, folderName = DEFAULT_TARGET_FOLDER_NAME) {
+  appendLog(session, `准备在分享页指定转存目录: ${folderName}`);
+
+  const targetTexts = ['转存至', '保存到', '存到'];
+  const opened = await safeClickByText(page, targetTexts, session, { exact: false });
+  if (opened) await page.waitForTimeout(1200);
+
+  const folderLocated = await locateFileInDrive(page, folderName, session).catch(() => ({ found: false }));
+  if (folderLocated?.found) {
+    appendLog(session, `已在转存弹层中选中目标目录: ${folderName}`);
+    return { ok: true, folderName, selector: folderLocated.selector };
+  }
+
+  const folderTextClicked = await safeClickByText(page, [folderName], session, { exact: false });
+  if (folderTextClicked) {
+    await page.waitForTimeout(1000);
+    appendLog(session, `已通过文本点击目标目录: ${folderName}`);
+    return { ok: true, folderName, selector: folderTextClicked };
+  }
+
+  appendLog(session, `未能在转存弹层中选中目标目录: ${folderName}`);
+  return { ok: false, folderName, reason: 'target_folder_not_selected' };
+}
+
 async function triggerQuarkTransfer(page, session, detectedFileName) {
   const selectedItem = await selectSharedFileItem(page, detectedFileName || '', session);
   await page.waitForTimeout(800);
 
+  const targetSelection = await chooseQuarkTransferTarget(page, session, DEFAULT_TARGET_FOLDER_NAME);
+
   let clicked = await safeClick(page, STORAGE_CONFIG.quark.saveButtons, 2500);
-  if (clicked) return { clicked, selectedItem, method: 'selector' };
+  if (clicked) return { clicked, selectedItem, targetSelection, method: 'selector' };
 
   const fallbackTexts = ['保存到网盘', '立即保存', '存到网盘', '转存'];
   clicked = await safeClickByText(page, fallbackTexts, session);
   if (clicked) {
     await page.waitForTimeout(1000);
-    return { clicked, selectedItem, method: 'text' };
+    return { clicked, selectedItem, targetSelection, method: 'text' };
   }
 
   await detectQuarkSaveControls(page, session);
-  return { clicked: null, selectedItem, method: 'none' };
+  return { clicked: null, selectedItem, targetSelection, method: 'none' };
 }
 
 async function locateFileInDrive(page, fileName, session, options = {}) {
@@ -829,7 +855,7 @@ app.post('/api/transfer', async (req, res) => {
       const result = await triggerQuarkTransfer(page, session, detectedFileName || '');
       selectedItem = result.selectedItem;
       clicked = result.clicked;
-      appendLog(session, `夸克转存触发结果: method=${result.method}, clicked=${result.clicked || 'none'}`);
+      appendLog(session, `夸克转存触发结果: method=${result.method}, clicked=${result.clicked || 'none'}, folder=${result.targetSelection?.ok ? result.targetSelection.folderName : 'not_selected'}`);
     } else {
       selectedItem = await selectSharedFileItem(page, detectedFileName || '', session);
       clicked = await safeClick(page, config.saveButtons, 4000);
