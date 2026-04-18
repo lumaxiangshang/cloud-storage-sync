@@ -674,20 +674,47 @@ async function locateFileInDrive(page, fileName, session, options = {}) {
   return { found: false, reason: 'file_not_found' };
 }
 
+async function configureQuarkShareOptions(page, session) {
+  appendLog(session, '开始配置分享选项: 永久分享 + 无提取码');
+
+  await safeClickByText(page, ['永久有效', '永久分享'], session, { exact: false });
+  await page.waitForTimeout(600);
+
+  const noCodeTexts = ['无提取码', '不设提取码', '公开分享'];
+  const noCodeClicked = await safeClickByText(page, noCodeTexts, session, { exact: false });
+  if (noCodeClicked) {
+    appendLog(session, `已设置无需提取码: ${noCodeClicked}`);
+  }
+
+  const createClicked = await safeClick(page, ['text=创建分享', 'text=创建链接', 'button:has-text("创建分享")'], 2000)
+    || await safeClickByText(page, ['创建分享', '创建链接'], session, { exact: false });
+
+  if (createClicked) appendLog(session, `已触发创建分享: ${createClicked}`);
+  await page.waitForTimeout(1500);
+  return { createClicked: createClicked || '' };
+}
+
 async function tryShareFlow(page, config, storageType, session) {
   const shareClicked = await safeClick(page, config.shareButtons, 2500);
   if (!shareClicked) return { ok: false, stage: 'share_button' };
 
   await page.waitForTimeout(2000);
-  await safeClick(page, ['text=全部', 'text=公开', 'text=创建链接', 'button:has-text("创建分享")'], 1500);
-  const copyClicked = await safeClick(page, config.copyButtons, 2500);
+  let shareConfig = { createClicked: '' };
+  if (storageType === 'quark') {
+    shareConfig = await configureQuarkShareOptions(page, session);
+  } else {
+    await safeClick(page, ['text=全部', 'text=公开', 'text=创建链接', 'button:has-text("创建分享")'], 1500);
+  }
+
+  const copyClicked = await safeClick(page, config.copyButtons, 2500)
+    || await safeClickByText(page, ['复制链接', '复制全部'], session, { exact: false });
   await page.waitForTimeout(1200);
   const shareResult = await extractShareLink(page, storageType);
   if (!shareResult) {
     const visibleTexts = await collectVisibleTexts(page, 50);
     appendLog(session, `分享弹层中未抓到链接，可见文本: ${visibleTexts.join(' | ').slice(0, 300)}`);
   }
-  return { ok: Boolean(shareResult), shareClicked, copyClicked, shareResult };
+  return { ok: Boolean(shareResult), shareClicked, copyClicked, shareConfig, shareResult };
 }
 
 app.get('/api/health', async (req, res) => {
@@ -1017,6 +1044,7 @@ app.post('/api/share', async (req, res) => {
     session.sharePage = activePage;
     const shareAttempt = await tryShareFlow(activePage, config, actualStorage, session);
     if (shareAttempt.shareClicked) appendLog(session, `已点击分享按钮: ${shareAttempt.shareClicked}`);
+    if (shareAttempt.shareConfig?.createClicked) appendLog(session, `已点击创建分享按钮: ${shareAttempt.shareConfig.createClicked}`);
     if (shareAttempt.copyClicked) appendLog(session, `已点击复制链接按钮: ${shareAttempt.copyClicked}`);
 
     if (shareAttempt.ok) {
