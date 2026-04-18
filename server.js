@@ -655,7 +655,29 @@ async function chooseQuarkTransferTarget(page, session, folderName = DEFAULT_TAR
       if (confirmCreate) {
         await page.waitForTimeout(1200);
         appendLog(session, `已在转存目录弹层中创建资料仓库并确认`);
-        return { ok: true, folderName, selector: 'created-folder', pickerInfo, dialogState };
+
+        const createdFolderPicked = await page.evaluate((folderName) => {
+          const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+          const nodes = Array.from(document.querySelectorAll('div, span, p, li, button'));
+          const target = nodes.find((node) => {
+            const text = norm(node.textContent);
+            return text === folderName || text.endsWith('/' + folderName) || text.includes(folderName);
+          });
+          if (!target) return null;
+          const rect = target.getBoundingClientRect();
+          const x = rect.left + rect.width / 2;
+          const y = rect.top + rect.height / 2;
+          const el = document.elementFromPoint(x, y);
+          if (el) el.click();
+          return { text: norm(target.textContent), x, y };
+        }, folderName).catch(() => null);
+
+        if (createdFolderPicked) {
+          await page.waitForTimeout(1000);
+          appendLog(session, `新建后已重新命中资料仓库: ${createdFolderPicked.text}`);
+        }
+
+        return { ok: true, folderName, selector: 'created-folder', pickerInfo, dialogState, createdFolderPicked };
       }
     }
   }
