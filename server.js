@@ -224,25 +224,27 @@ async function safeClick(page, selectors, timeout = 3000) {
 }
 
 async function safeClickByText(page, texts, session, options = {}) {
-  const clicked = await page.evaluate(({ texts, exact }) => {
+  const clicked = await page.evaluate(({ texts, exact, preferLast, maxTextLength }) => {
     const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
     const matches = [];
     const nodes = Array.from(document.querySelectorAll('button, a, div, span, p'));
     for (const node of nodes) {
       const text = norm(node.textContent);
       if (!text) continue;
+      if (maxTextLength && text.length > maxTextLength) continue;
       const ok = texts.some((t) => exact ? text === t : text.includes(t));
       if (!ok) continue;
       const rect = node.getBoundingClientRect();
       if (rect.width < 8 || rect.height < 8) continue;
-      matches.push({ text, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+      matches.push({ text, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, area: rect.width * rect.height });
     }
-    const target = matches[0];
-    if (!target) return null;
+    if (!matches.length) return null;
+    const ordered = matches.sort((a, b) => preferLast ? b.area - a.area : a.area - b.area);
+    const target = ordered[0];
     const el = document.elementFromPoint(target.x, target.y);
     if (el) el.click();
     return target.text;
-  }, { texts, exact: Boolean(options.exact) }).catch(() => null);
+  }, { texts, exact: Boolean(options.exact), preferLast: Boolean(options.preferLast), maxTextLength: options.maxTextLength || 0 }).catch(() => null);
 
   if (clicked && session) appendLog(session, `通过文本命中点击节点: ${clicked}`);
   return clicked;
@@ -566,17 +568,28 @@ async function detectQuarkSaveControls(page, session) {
 async function chooseQuarkTransferTarget(page, session, folderName = DEFAULT_TARGET_FOLDER_NAME) {
   appendLog(session, `准备在分享页指定转存目录: ${folderName}`);
 
-  const targetTexts = ['转存至', '保存到', '存到'];
-  const opened = await safeClickByText(page, targetTexts, session, { exact: false });
-  if (opened) await page.waitForTimeout(1200);
+  const folderPickerClicked = await page.evaluate((folderName) => {
+    const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+    const candidates = Array.from(document.querySelectorAll('div, span, p, button'));
+    const field = candidates.find((node) => {
+      const text = norm(node.textContent);
+      return text.includes('转存至：') && text.includes(folderName);
+    }) || candidates.find((node) => norm(node.textContent).includes('转存至：'));
+    if (!field) return null;
+    const rect = field.getBoundingClientRect();
+    const clickX = rect.right - 24;
+    const clickY = rect.top + rect.height / 2;
+    const el = document.elementFromPoint(clickX, clickY);
+    if (el) el.click();
+    return norm(field.textContent);
+  }, folderName).catch(() => null);
 
-  const folderLocated = await locateFileInDrive(page, folderName, session).catch(() => ({ found: false }));
-  if (folderLocated?.found) {
-    appendLog(session, `已在转存弹层中选中目标目录: ${folderName}`);
-    return { ok: true, folderName, selector: folderLocated.selector };
+  if (folderPickerClicked) {
+    appendLog(session, `已点击转存目录区域: ${folderPickerClicked}`);
+    await page.waitForTimeout(1200);
   }
 
-  const folderTextClicked = await safeClickByText(page, [folderName], session, { exact: false });
+  const folderTextClicked = await safeClickByText(page, [folderName], session, { exact: false, maxTextLength: 20 });
   if (folderTextClicked) {
     await page.waitForTimeout(1000);
     appendLog(session, `已通过文本点击目标目录: ${folderName}`);
@@ -593,11 +606,11 @@ async function triggerQuarkTransfer(page, session, detectedFileName) {
 
   const targetSelection = await chooseQuarkTransferTarget(page, session, DEFAULT_TARGET_FOLDER_NAME);
 
-  let clicked = await safeClick(page, STORAGE_CONFIG.quark.saveButtons, 2500);
+  let clicked = await safeClick(page, ['button:has-text("保存到网盘")', 'text=保存到网盘'], 2500);
   if (clicked) return { clicked, selectedItem, targetSelection, method: 'selector' };
 
-  const fallbackTexts = ['保存到网盘', '立即保存', '存到网盘', '转存'];
-  clicked = await safeClickByText(page, fallbackTexts, session);
+  const fallbackTexts = ['保存到网盘'];
+  clicked = await safeClickByText(page, fallbackTexts, session, { exact: false, maxTextLength: 12, preferLast: true });
   if (clicked) {
     await page.waitForTimeout(1000);
     return { clicked, selectedItem, targetSelection, method: 'text' };
