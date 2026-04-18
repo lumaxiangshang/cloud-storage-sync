@@ -35,6 +35,7 @@
       const [loginDebug, setLoginDebug] = useState(null);
       const [transferDebug, setTransferDebug] = useState(null);
       const [health, setHealth] = useState(null);
+      const [debugShareUrl, setDebugShareUrl] = useState('');
 
       const currentStorage = useMemo(
         () => storageOptions.find(s => s.value === selectedStorage),
@@ -137,6 +138,21 @@
           setLoginDebug(data.loginState);
           setMessage(data.loginState.loggedIn ? '已自动抓 cookie 并确认登录成功' : '自动抓 cookie 后仍未确认登录成功');
           if (data.loginState.loggedIn) setStep(2);
+        } catch (error) {
+          setMessage('错误: ' + error.message);
+        } finally {
+          setIsProcessing(false);
+        }
+      };
+
+      const openDebugShare = async () => {
+        if (!debugShareUrl.trim()) return alert('请输入要打开的分享链接');
+        setIsProcessing(true);
+        try {
+          const response = await fetch(`/api/debug/open-share?sessionId=${encodeURIComponent(sessionId)}&storageType=${encodeURIComponent(selectedStorage)}&shareUrl=${encodeURIComponent(debugShareUrl)}`);
+          const data = await response.json();
+          if (!response.ok || !data.success) throw new Error(data.error || '打开测试界面失败');
+          setMessage('已打开测试浏览器窗口，请直接观察我实际打开和操作的页面');
         } catch (error) {
           setMessage('错误: ' + error.message);
         } finally {
@@ -377,6 +393,20 @@
                 <div>转存后页面: {transferDebug.after?.title} | {transferDebug.after?.url}</div>
               </div>
             )}
+
+            <div className="mt-6 bg-indigo-950/40 border border-indigo-400/20 rounded-2xl p-4 text-xs text-indigo-100 space-y-3">
+              <div className="text-sm font-semibold text-white">可视化测试界面</div>
+              <input
+                value={debugShareUrl}
+                onChange={(e) => setDebugShareUrl(e.target.value)}
+                placeholder="粘贴夸克分享链接，打开真实测试界面"
+                className="w-full px-3 py-2 rounded-lg bg-white/10 border border-white/20 text-white"
+              />
+              <button onClick={openDebugShare} disabled={isProcessing} className="w-full py-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-50 font-semibold">
+                {isProcessing ? '打开中...' : '🧪 打开可见测试浏览器'}
+              </button>
+              {status?.debugEvidence?.screenshotPath && <div>最近截图: {status.debugEvidence.screenshotPath}</div>}
+            </div>
 
             <div className="mt-6 bg-black/20 border border-white/10 rounded-2xl p-4">
               <div className="text-sm font-semibold text-white mb-3">运行日志</div>

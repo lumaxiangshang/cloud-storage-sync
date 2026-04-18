@@ -180,10 +180,10 @@ async function getSessionCookieSummary(sessionId) {
 }
 
 async function initBrowser() {
-  const headless = process.env.HEADLESS !== 'false';
+  const headless = process.env.HEADLESS === 'true' ? true : false;
   return chromium.launch({
     headless,
-    slowMo: headless ? 0 : 150
+    slowMo: headless ? 0 : 300
   });
 }
 
@@ -272,7 +272,12 @@ async function capturePageEvidence(page, label = '') {
       cls: node.className || ''
     }))
   ).catch(() => []);
-  return { label, url, title, visibleTexts, controls };
+  const screenshotDir = path.join(__dirname, 'debug-shots');
+  if (!fs.existsSync(screenshotDir)) fs.mkdirSync(screenshotDir, { recursive: true });
+  const filename = `${Date.now()}-${label || 'page'}.png`;
+  const screenshotPath = path.join(screenshotDir, filename);
+  await page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {});
+  return { label, url, title, visibleTexts, controls, screenshotPath: `./debug-shots/${filename}` };
 }
 
 function diffEvidence(before, after) {
@@ -1271,6 +1276,26 @@ app.post('/api/reset', async (req, res) => {
     }
     persistSessions();
     res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/debug/open-share', async (req, res) => {
+  try {
+    const { sessionId, shareUrl, storageType = 'quark' } = req.query;
+    if (!sessionId || !shareUrl) {
+      return res.status(400).json({ success: false, error: '缺少 sessionId 或 shareUrl' });
+    }
+    const session = ensureSession(sessionId);
+    updateSession(sessionId, { storageType });
+    const page = await getOrCreatePage(sessionId, 'transferPage');
+    await page.goto(shareUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    await page.waitForTimeout(2500);
+    const evidence = await capturePageEvidence(page, 'manual-open-share');
+    updateSession(sessionId, { debugEvidence: evidence, message: '已打开分享页测试界面，请直接观察浏览器窗口' });
+    appendLog(session, `已打开可视化测试界面: ${evidence.url}`);
+    res.json({ success: true, evidence, session: ensureSession(sessionId) });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
