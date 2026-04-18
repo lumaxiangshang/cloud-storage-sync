@@ -604,8 +604,11 @@ async function chooseQuarkTransferTarget(page, session, folderName = DEFAULT_TAR
 
   if (pickerInfo) {
     appendLog(session, `已点击底部转存至区域: ${pickerInfo.text}`);
-    await page.waitForTimeout(1200);
+    await page.waitForTimeout(1500);
   }
+
+  const dialogState = await capturePageEvidence(page, 'after-open-transfer-target');
+  appendLog(session, `转存目录弹层证据: ${dialogState.title} | ${dialogState.url}`);
 
   const folderPicked = await page.evaluate((folderName) => {
     const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
@@ -626,11 +629,39 @@ async function chooseQuarkTransferTarget(page, session, folderName = DEFAULT_TAR
   if (folderPicked) {
     await page.waitForTimeout(1000);
     appendLog(session, `已在转存目录选择中命中: ${folderPicked.text}`);
-    return { ok: true, folderName, selector: folderPicked.text, pickerInfo };
+    return { ok: true, folderName, selector: folderPicked.text, pickerInfo, dialogState };
+  }
+
+  const createFolderClicked = await safeClickByText(page, ['新建文件夹', '新建'], session, { exact: false, maxTextLength: 20, preferLast: true });
+  if (createFolderClicked) {
+    await page.waitForTimeout(800);
+    appendLog(session, `转存目录弹层中未找到资料仓库，已尝试新建: ${folderName}`);
+
+    const created = await page.evaluate((folderName) => {
+      const inputs = Array.from(document.querySelectorAll('input[type="text"], input'));
+      const input = inputs[inputs.length - 1];
+      if (!input) return null;
+      input.focus();
+      input.value = folderName;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+      return true;
+    }, folderName).catch(() => null);
+
+    if (created) {
+      await page.waitForTimeout(500);
+      const confirmCreate = await safeClick(page, ['text=确定', 'text=创建', 'button:has-text("确定")'], 1500)
+        || await safeClickByText(page, ['确定', '创建'], session, { exact: false, maxTextLength: 10, preferLast: true });
+      if (confirmCreate) {
+        await page.waitForTimeout(1200);
+        appendLog(session, `已在转存目录弹层中创建资料仓库并确认`);
+        return { ok: true, folderName, selector: 'created-folder', pickerInfo, dialogState };
+      }
+    }
   }
 
   appendLog(session, `未能在转存目录选择中命中: ${folderName}`);
-  return { ok: false, folderName, reason: 'target_folder_not_selected', pickerInfo };
+  return { ok: false, folderName, reason: 'target_folder_not_selected', pickerInfo, dialogState };
 }
 
 async function triggerQuarkTransfer(page, session, detectedFileName) {
