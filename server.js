@@ -142,6 +142,28 @@ function updateSession(sessionId, patch) {
   return session;
 }
 
+function maskCookieValue(value = '') {
+  if (!value) return '';
+  if (value.length <= 8) return '***';
+  return `${value.slice(0, 4)}***${value.slice(-4)}`;
+}
+
+async function getSessionCookieSummary(sessionId) {
+  const bundle = browserContexts.get(sessionId);
+  if (!bundle) return [];
+  const cookies = await bundle.context.cookies().catch(() => []);
+  return cookies.map((cookie) => ({
+    name: cookie.name,
+    domain: cookie.domain,
+    path: cookie.path,
+    expires: cookie.expires,
+    httpOnly: cookie.httpOnly,
+    secure: cookie.secure,
+    sameSite: cookie.sameSite,
+    valuePreview: maskCookieValue(cookie.value)
+  }));
+}
+
 async function initBrowser() {
   const headless = process.env.HEADLESS !== 'false';
   return chromium.launch({
@@ -251,10 +273,39 @@ async function detectLoggedIn(page, storageType) {
   for (const selector of config.loginCheck) {
     try {
       await page.locator(selector).first().waitFor({ state: 'visible', timeout: 1500 });
-      return true;
+      return { loggedIn: true, method: 'selector', evidence: selector };
     } catch {}
   }
-  return false;
+  return { loggedIn: false, method: 'selector', evidence: null };
+}
+
+async function verifyLoginState(sessionId, storageType) {
+  const page = await getOrCreatePage(sessionId, 'mainPage');
+  const config = STORAGE_CONFIG[storageType];
+  await page.goto(config.homeUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+  await page.waitForTimeout(1800);
+
+  const selectorCheck = await detectLoggedIn(page, storageType);
+  const cookies = await getSessionCookieSummary(sessionId);
+  const cookieNames = cookies.map((item) => item.name.toLowerCase());
+  const hasRelevantCookie = storageType === 'quark'
+    ? cookieNames.some((name) => /token|sid|sess|cookie|us/.test(name))
+    : cookies.length > 0;
+
+  const title = await page.title().catch(() => '');
+  const url = page.url();
+  const visibleTexts = await collectVisibleTexts(page, 40);
+
+  return {
+    loggedIn: Boolean(selectorCheck.loggedIn && hasRelevantCookie),
+    selectorCheck,
+    hasRelevantCookie,
+    cookieCount: cookies.length,
+    cookies,
+    title,
+    url,
+    visibleTexts
+  };
 }
 
 function validateShareUrl(url, storageType) {
@@ -511,8 +562,9 @@ app.get('/api/status', async (req, res) => {
 
   if (session.storageType && browserContexts.has(sessionId) && session.mainPage && !session.mainPage.isClosed()) {
     try {
-      const loggedIn = await detectLoggedIn(session.mainPage, session.storageType);
-      session.isLoggedIn = loggedIn;
+      const loginState = await verifyLoginState(sessionId, session.storageType);
+      session.isLoggedIn = loginState.loggedIn;
+      session.loginState = loginState;
     } catch {}
   }
 
@@ -540,21 +592,23 @@ app.post('/api/login', async (req, res) => {
 
     setTimeout(async () => {
       try {
-        const loggedIn = await detectLoggedIn(page, storageType);
-        if (loggedIn) {
+        const loginState = await verifyLoginState(sessionId, storageType);
+        if (loginState.loggedIn) {
           updateSession(sessionId, {
             isLoggedIn: true,
+            loginState,
             status: 'ready_for_transfer',
             phase: 'login',
-            message: `${config.name} 已检测到登录，可以继续转存`
+            message: `${config.name} 已检测到真实登录，可以继续转存`
           });
-          appendLog(session, '已自动检测到登录成功');
+          appendLog(session, `已自动检测到登录成功，cookie=${loginState.cookieCount}`);
         } else {
           updateSession(sessionId, {
             isLoggedIn: false,
-            message: `请在浏览器中完成${config.name}登录，登录后此页面会自动检测`
+            loginState,
+            message: `请在浏览器中完成${config.name}登录，当前未通过真实登录校验`
           });
-          appendLog(session, '等待用户手动登录');
+          appendLog(session, `等待用户手动登录，selector=${loginState.selectorCheck?.evidence || 'none'}, cookie=${loginState.cookieCount}`);
         }
       } catch (error) {
         appendLog(session, `登录检测失败: ${error.message}`);
@@ -580,18 +634,18 @@ app.post('/api/check-login', async (req, res) => {
       return res.status(400).json({ success: false, error: '请先选择网盘并打开登录页' });
     }
 
-    const page = await getOrCreatePage(sessionId);
-    const loggedIn = await detectLoggedIn(page, session.storageType);
+    const loginState = await verifyLoginState(sessionId, session.storageType);
 
     updateSession(sessionId, {
-      isLoggedIn: loggedIn,
-      status: loggedIn ? 'ready_for_transfer' : 'waiting_login',
+      isLoggedIn: loginState.loggedIn,
+      loginState,
+      status: loginState.loggedIn ? 'ready_for_transfer' : 'waiting_login',
       phase: 'login',
-      message: loggedIn ? '已登录，开始输入分享链接吧' : '尚未检测到登录，请继续在浏览器里完成登录'
+      message: loginState.loggedIn ? '已通过真实登录校验，开始输入分享链接吧' : '尚未通过真实登录校验，请继续在浏览器里完成登录'
     });
-    appendLog(session, loggedIn ? '手动检测到登录成功' : '手动检测仍未登录');
+    appendLog(session, loginState.loggedIn ? `手动检测到登录成功，cookie=${loginState.cookieCount}` : `手动检测仍未登录，cookie=${loginState.cookieCount}`);
 
-    res.json({ success: true, loggedIn, session });
+    res.json({ success: true, loggedIn: loginState.loggedIn, session: ensureSession(sessionId) });
   } catch (error) {
     console.error('Check login error:', error);
     res.status(500).json({ success: false, error: error.message });
@@ -841,6 +895,22 @@ app.post('/api/fetch-share-link', async (req, res) => {
     appendLog(session, `手动补提取成功: ${shareResult}`);
 
     res.json({ success: true, shareUrl: shareResult, session: ensureSession(sessionId) });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/debug/login', async (req, res) => {
+  try {
+    const { sessionId } = req.query;
+    const session = ensureSession(sessionId);
+    if (!session.storageType) {
+      return res.status(400).json({ success: false, error: '当前 session 还没有选定网盘' });
+    }
+
+    const loginState = await verifyLoginState(sessionId, session.storageType);
+    updateSession(sessionId, { isLoggedIn: loginState.loggedIn, loginState });
+    res.json({ success: true, loginState });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }

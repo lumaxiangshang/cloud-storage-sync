@@ -32,6 +32,7 @@
       const [message, setMessage] = useState('');
       const [sessionId] = useState(generateSessionId());
       const [status, setStatus] = useState(null);
+      const [loginDebug, setLoginDebug] = useState(null);
 
       const currentStorage = useMemo(
         () => storageOptions.find(s => s.value === selectedStorage),
@@ -90,6 +91,21 @@
         try {
           const data = await postJson('/api/check-login', { sessionId });
           if (data.loggedIn) setStep(2);
+        } catch (error) {
+          setMessage('错误: ' + error.message);
+        } finally {
+          setIsProcessing(false);
+        }
+      };
+
+      const debugLogin = async () => {
+        setIsProcessing(true);
+        try {
+          const response = await fetch(`/api/debug/login?sessionId=${encodeURIComponent(sessionId)}`);
+          const data = await response.json();
+          if (!response.ok || !data.success) throw new Error(data.error || '获取登录调试信息失败');
+          setLoginDebug(data.loginState);
+          setMessage(data.loginState.loggedIn ? '已抓到 cookie 并通过登录校验' : '还没通过真实登录校验，请看下方调试信息');
         } catch (error) {
           setMessage('错误: ' + error.message);
         } finally {
@@ -234,6 +250,9 @@
                     <button onClick={checkLogin} disabled={isProcessing} className="flex-1 py-4 bg-green-600 text-white rounded-xl hover:bg-green-700 disabled:opacity-50 font-semibold">
                       ✅ 检查是否已登录
                     </button>
+                    <button onClick={debugLogin} disabled={isProcessing} className="flex-1 py-4 bg-sky-600 text-white rounded-xl hover:bg-sky-700 disabled:opacity-50 font-semibold">
+                      🍪 抓 Cookie 看登录态
+                    </button>
                   </div>
                 </>
               )}
@@ -294,6 +313,17 @@
                 </>
               )}
             </div>
+
+            {loginDebug && (
+              <div className="mt-6 bg-sky-950/40 border border-sky-400/20 rounded-2xl p-4 text-xs text-sky-100 space-y-2">
+                <div className="text-sm font-semibold text-white">登录调试</div>
+                <div>真实登录: {String(loginDebug.loggedIn)}</div>
+                <div>命中选择器: {loginDebug.selectorCheck?.evidence || 'none'}</div>
+                <div>Cookie 数量: {loginDebug.cookieCount}</div>
+                <div>当前页面: {loginDebug.title} | {loginDebug.url}</div>
+                <div>Cookie 预览: {(loginDebug.cookies || []).map(c => `${c.name}=${c.valuePreview}`).join(' ; ') || 'none'}</div>
+              </div>
+            )}
 
             <div className="mt-6 bg-black/20 border border-white/10 rounded-2xl p-4">
               <div className="text-sm font-semibold text-white mb-3">运行日志</div>
