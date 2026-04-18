@@ -1293,9 +1293,70 @@ app.get('/api/debug/open-share', async (req, res) => {
     await page.goto(shareUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
     await page.waitForTimeout(2500);
     const evidence = await capturePageEvidence(page, 'manual-open-share');
-    updateSession(sessionId, { debugEvidence: evidence, message: '已打开分享页测试界面，请直接观察浏览器窗口' });
+    const structure = await page.evaluate(() => {
+      const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+      const checkboxCount = document.querySelectorAll('input[type="checkbox"], [role="checkbox"]').length;
+      const transferNode = Array.from(document.querySelectorAll('div, span, p, button')).find((n) => norm(n.textContent).startsWith('转存至'));
+      const saveBtn = Array.from(document.querySelectorAll('button, div, span, a')).find((n) => norm(n.textContent) === '保存到网盘');
+      return {
+        checkboxCount,
+        transferText: transferNode ? norm(transferNode.textContent) : '',
+        saveButtonText: saveBtn ? norm(saveBtn.textContent) : '',
+        inIframe: window.self !== window.top
+      };
+    }).catch(() => ({ checkboxCount: 0, transferText: '', saveButtonText: '', inIframe: false }));
+    updateSession(sessionId, { debugEvidence: { ...evidence, structure }, message: '已打开分享页测试界面，请直接观察浏览器窗口' });
     appendLog(session, `已打开可视化测试界面: ${evidence.url}`);
-    res.json({ success: true, evidence, session: ensureSession(sessionId) });
+    appendLog(session, `页面结构探针: checkbox=${structure.checkboxCount}, transfer=${structure.transferText || 'none'}, save=${structure.saveButtonText || 'none'}, iframe=${structure.inIframe}`);
+    res.json({ success: true, evidence: { ...evidence, structure }, session: ensureSession(sessionId) });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/debug/step-transfer', async (req, res) => {
+  try {
+    const { sessionId, shareUrl, storageType = 'quark' } = req.body;
+    if (!sessionId || !shareUrl) {
+      return res.status(400).json({ success: false, error: '缺少 sessionId 或 shareUrl' });
+    }
+    const session = ensureSession(sessionId);
+    updateSession(sessionId, { storageType, shareUrl });
+    const page = await getOrCreatePage(sessionId, 'transferPage');
+    await page.goto(shareUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    await page.waitForTimeout(2500);
+
+    const detectedFileName = await extractSharedFileName(page);
+    appendLog(session, `调试模式识别到目标文件: ${detectedFileName || 'none'}`);
+
+    const selectedItem = await selectSharedFileItem(page, detectedFileName || '', session);
+    const afterSelect = await capturePageEvidence(page, 'after-select-item');
+
+    const targetSelection = await chooseQuarkTransferTarget(page, session, DEFAULT_TARGET_FOLDER_NAME);
+    const afterTarget = await capturePageEvidence(page, 'after-choose-target');
+
+    const preciseButton = await page.evaluate(() => {
+      const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+      const nodes = Array.from(document.querySelectorAll('button, div, span, a'));
+      const candidates = nodes.filter((node) => norm(node.textContent) === '保存到网盘');
+      const target = candidates[candidates.length - 1];
+      if (!target) return null;
+      const rect = target.getBoundingClientRect();
+      return { text: norm(target.textContent), x: rect.left + rect.width / 2, y: rect.top + rect.height / 2, width: rect.width, height: rect.height };
+    }).catch(() => null);
+
+    updateSession(sessionId, {
+      debugEvidence: {
+        selectedItem,
+        targetSelection,
+        afterSelect,
+        afterTarget,
+        preciseButton
+      },
+      message: '已完成逐步调试，请查看浏览器窗口和截图'
+    });
+    appendLog(session, `逐步调试结果: selected=${selectedItem.selected}, target=${targetSelection.ok}, saveBtn=${preciseButton ? 'found' : 'missing'}`);
+    res.json({ success: true, debug: { selectedItem, targetSelection, afterSelect, afterTarget, preciseButton }, session: ensureSession(sessionId) });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }

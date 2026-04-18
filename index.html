@@ -160,6 +160,23 @@
         }
       };
 
+      const stepDebugTransfer = async () => {
+        if (!debugShareUrl.trim()) return alert('请输入要调试的分享链接');
+        setIsProcessing(true);
+        try {
+          const data = await postJson('/api/debug/step-transfer', {
+            sessionId,
+            storageType: selectedStorage,
+            shareUrl: debugShareUrl
+          });
+          setMessage('已执行逐步调试，请看浏览器窗口、截图和日志');
+        } catch (error) {
+          setMessage('错误: ' + error.message);
+        } finally {
+          setIsProcessing(false);
+        }
+      };
+
       const handleTransfer = async () => {
         if (!shareUrl.trim()) return alert('请输入分享链接');
         setIsProcessing(true);
@@ -405,7 +422,15 @@
               <button onClick={openDebugShare} disabled={isProcessing} className="w-full py-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-50 font-semibold">
                 {isProcessing ? '打开中...' : '🧪 打开可见测试浏览器'}
               </button>
+              <button onClick={stepDebugTransfer} disabled={isProcessing} className="w-full py-3 bg-fuchsia-600 text-white rounded-xl hover:bg-fuchsia-700 disabled:opacity-50 font-semibold">
+                {isProcessing ? '调试中...' : '🎯 逐步调试转存 1-2-3'}
+              </button>
               {status?.debugEvidence?.screenshotPath && <div>最近截图: {status.debugEvidence.screenshotPath}</div>}
+              {status?.debugEvidence?.structure && (
+                <div>
+                  结构探针: checkbox={status.debugEvidence.structure.checkboxCount}, transfer={status.debugEvidence.structure.transferText || 'none'}, save={status.debugEvidence.structure.saveButtonText || 'none'}, iframe={String(status.debugEvidence.structure.inIframe)}
+                </div>
+              )}
             </div>
 
             <div className="mt-6 bg-black/20 border border-white/10 rounded-2xl p-4">
