@@ -186,6 +186,31 @@ async function safeClick(page, selectors, timeout = 3000) {
   return null;
 }
 
+async function safeClickByText(page, texts, session, options = {}) {
+  const clicked = await page.evaluate(({ texts, exact }) => {
+    const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+    const matches = [];
+    const nodes = Array.from(document.querySelectorAll('button, a, div, span, p'));
+    for (const node of nodes) {
+      const text = norm(node.textContent);
+      if (!text) continue;
+      const ok = texts.some((t) => exact ? text === t : text.includes(t));
+      if (!ok) continue;
+      const rect = node.getBoundingClientRect();
+      if (rect.width < 8 || rect.height < 8) continue;
+      matches.push({ text, x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 });
+    }
+    const target = matches[0];
+    if (!target) return null;
+    const el = document.elementFromPoint(target.x, target.y);
+    if (el) el.click();
+    return target.text;
+  }, { texts, exact: Boolean(options.exact) }).catch(() => null);
+
+  if (clicked && session) appendLog(session, `通过文本命中点击节点: ${clicked}`);
+  return clicked;
+}
+
 async function collectVisibleTexts(page, limit = 80) {
   return page.locator('button, a, span, div').evaluateAll((nodes, max) => {
     return nodes
@@ -358,6 +383,43 @@ async function openTransferredTarget(page, session) {
   }
 
   return { opened: false };
+}
+
+async function detectQuarkSaveControls(page, session) {
+  const controls = await page.evaluate(() => {
+    const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+    const nodes = Array.from(document.querySelectorAll('button, a, div, span'));
+    return nodes
+      .map((node) => ({
+        text: norm(node.textContent),
+        cls: node.className || '',
+        role: node.getAttribute('role') || '',
+        title: node.getAttribute('title') || ''
+      }))
+      .filter((item) => item.text)
+      .filter((item) => /保存|转存|网盘|目录|全部文件|上传到/.test(item.text))
+      .slice(0, 80);
+  }).catch(() => []);
+  appendLog(session, `转存候选控件: ${controls.map(item => item.text).join(' | ').slice(0, 400)}`);
+  return controls;
+}
+
+async function triggerQuarkTransfer(page, session, detectedFileName) {
+  const selectedItem = await selectSharedFileItem(page, detectedFileName || '', session);
+  await page.waitForTimeout(800);
+
+  let clicked = await safeClick(page, STORAGE_CONFIG.quark.saveButtons, 2500);
+  if (clicked) return { clicked, selectedItem, method: 'selector' };
+
+  const fallbackTexts = ['保存到网盘', '立即保存', '存到网盘', '转存'];
+  clicked = await safeClickByText(page, fallbackTexts, session);
+  if (clicked) {
+    await page.waitForTimeout(1000);
+    return { clicked, selectedItem, method: 'text' };
+  }
+
+  await detectQuarkSaveControls(page, session);
+  return { clicked: null, selectedItem, method: 'none' };
 }
 
 async function locateFileInDrive(page, fileName, session, options = {}) {
@@ -570,20 +632,30 @@ app.post('/api/transfer', async (req, res) => {
       appendLog(session, '未稳定识别到目标文件名，后续优先依赖成功页入口');
     }
 
-    const selectedItem = await selectSharedFileItem(page, detectedFileName || '', session);
-    let clicked = await safeClick(page, config.saveButtons, 4000);
-    if (!clicked && config.moreButtons?.length) {
-      const moreClicked = await safeClick(page, config.moreButtons, 2000);
-      if (moreClicked) {
-        appendLog(session, `已点击更多操作: ${moreClicked}`);
-        await page.waitForTimeout(1200);
-        clicked = await safeClick(page, config.saveButtons, 3000);
+    let selectedItem = { selected: false };
+    let clicked = null;
+
+    if (storageType === 'quark') {
+      const result = await triggerQuarkTransfer(page, session, detectedFileName || '');
+      selectedItem = result.selectedItem;
+      clicked = result.clicked;
+      appendLog(session, `夸克转存触发结果: method=${result.method}, clicked=${result.clicked || 'none'}`);
+    } else {
+      selectedItem = await selectSharedFileItem(page, detectedFileName || '', session);
+      clicked = await safeClick(page, config.saveButtons, 4000);
+      if (!clicked && config.moreButtons?.length) {
+        const moreClicked = await safeClick(page, config.moreButtons, 2000);
+        if (moreClicked) {
+          appendLog(session, `已点击更多操作: ${moreClicked}`);
+          await page.waitForTimeout(1200);
+          clicked = await safeClick(page, config.saveButtons, 3000);
+        }
       }
     }
 
     if (!clicked) {
-      const visibleTexts = await collectVisibleTexts(page, 40);
-      appendLog(session, `未找到自动转存按钮，可见文本片段: ${visibleTexts.join(' | ').slice(0, 300)}`);
+      const visibleTexts = await collectVisibleTexts(page, 60);
+      appendLog(session, `未找到自动转存按钮，可见文本片段: ${visibleTexts.join(' | ').slice(0, 500)}`);
       if (!selectedItem.selected) appendLog(session, '推测原因: 未选中分享页中的文件项');
       updateSession(sessionId, {
         status: 'needs_manual_transfer',
@@ -597,7 +669,10 @@ app.post('/api/transfer', async (req, res) => {
     appendLog(session, `已点击按钮: ${clicked}`);
     await page.waitForTimeout(1500);
 
-    const confirmed = await safeClick(page, config.confirmButtons, 3000);
+    let confirmed = await safeClick(page, config.confirmButtons, 3000);
+    if (!confirmed && storageType === 'quark') {
+      confirmed = await safeClickByText(page, ['确定', '确认', '保存', '继续保存'], session, { exact: false });
+    }
     if (confirmed) appendLog(session, `已点击确认按钮: ${confirmed}`);
 
     await page.waitForTimeout(2500);
