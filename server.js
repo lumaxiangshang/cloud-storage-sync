@@ -295,7 +295,7 @@ async function selectSharedFileItem(page, fileName, session) {
 
   const checkboxResult = await page.evaluate((name) => {
     const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
-    const rows = Array.from(document.querySelectorAll('tr, li, div'));
+    const rows = Array.from(document.querySelectorAll('tr, li, [role="row"], .ant-table-row, .list-item, .file-item, div'));
     const row = rows.find((node) => {
       const text = norm(node.textContent);
       return text && name && text.includes(name);
@@ -309,7 +309,7 @@ async function selectSharedFileItem(page, fileName, session) {
     }
 
     const rect = row.getBoundingClientRect();
-    const clickX = rect.left + 18;
+    const clickX = rect.left + 16;
     const clickY = rect.top + rect.height / 2;
     const el = document.elementFromPoint(clickX, clickY);
     if (el) el.click();
@@ -630,41 +630,44 @@ async function chooseQuarkTransferTarget(page, session, folderName = DEFAULT_TAR
 
 async function triggerQuarkTransfer(page, session, detectedFileName) {
   const selectedItem = await selectSharedFileItem(page, detectedFileName || '', session);
+  if (!selectedItem.selected) {
+    appendLog(session, '外部列表勾选失败，停止继续转存，避免误操作');
+    return { clicked: null, selectedItem, targetSelection: { ok: false, reason: 'select_failed' }, method: 'blocked' };
+  }
   await page.waitForTimeout(800);
 
   const targetSelection = await chooseQuarkTransferTarget(page, session, DEFAULT_TARGET_FOLDER_NAME);
-
-  let clicked = await safeClick(page, ['button:has-text("保存到网盘")', 'text=保存到网盘'], 2500);
-  if (!clicked) {
-    const preciseButton = await page.evaluate(() => {
-      const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
-      const nodes = Array.from(document.querySelectorAll('button, div, span, a'));
-      const candidates = nodes.filter((node) => norm(node.textContent) === '保存到网盘');
-      const target = candidates[candidates.length - 1];
-      if (!target) return null;
-      const rect = target.getBoundingClientRect();
-      const x = rect.left + rect.width / 2;
-      const y = rect.top + rect.height / 2;
-      const el = document.elementFromPoint(x, y);
-      if (el) el.click();
-      return { text: norm(target.textContent), x, y, width: rect.width, height: rect.height };
-    }).catch(() => null);
-    if (preciseButton) {
-      clicked = preciseButton.text;
-      appendLog(session, `已精准点击保存到网盘按钮: x=${Math.round(preciseButton.x)}, y=${Math.round(preciseButton.y)}, w=${Math.round(preciseButton.width)}, h=${Math.round(preciseButton.height)}`);
-    }
-  }
-  if (clicked) return { clicked, selectedItem, targetSelection, method: 'selector' };
-
-  const fallbackTexts = ['保存到网盘'];
-  clicked = await safeClickByText(page, fallbackTexts, session, { exact: false, maxTextLength: 12, preferLast: true });
-  if (clicked) {
-    await page.waitForTimeout(1000);
-    return { clicked, selectedItem, targetSelection, method: 'text' };
+  if (targetSelection.ok) {
+    appendLog(session, `已在转存目录选择中命中: ${targetSelection.folderName}`);
+  } else {
+    appendLog(session, '未在转存目录选择中命中: 资料仓库');
+    return { clicked: null, selectedItem, targetSelection, method: 'blocked' };
   }
 
+  let clicked = null;
+  const preciseButton = await page.evaluate(() => {
+    const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+    const nodes = Array.from(document.querySelectorAll('button, div, span, a'));
+    const candidates = nodes.filter((node) => norm(node.textContent) === '保存到网盘');
+    const target = candidates[candidates.length - 1];
+    if (!target) return null;
+    const rect = target.getBoundingClientRect();
+    const x = rect.left + rect.width / 2;
+    const y = rect.top + rect.height / 2;
+    const el = document.elementFromPoint(x, y);
+    if (el) el.click();
+    return { text: norm(target.textContent), x, y, width: rect.width, height: rect.height };
+  }).catch(() => null);
+
+  if (preciseButton) {
+    clicked = preciseButton.text;
+    appendLog(session, `已精准点击保存到网盘按钮: x=${Math.round(preciseButton.x)}, y=${Math.round(preciseButton.y)}, w=${Math.round(preciseButton.width)}, h=${Math.round(preciseButton.height)}`);
+    return { clicked, selectedItem, targetSelection, method: 'precise' };
+  }
+
+  appendLog(session, '未能精准命中保存到网盘按钮，停止继续转存，避免误点');
   await detectQuarkSaveControls(page, session);
-  return { clicked: null, selectedItem, targetSelection, method: 'none' };
+  return { clicked: null, selectedItem, targetSelection, method: 'blocked' };
 }
 
 async function locateFileInDrive(page, fileName, session, options = {}) {
@@ -958,7 +961,7 @@ app.post('/api/transfer', async (req, res) => {
 
     if (!clicked) {
       const visibleTexts = await collectVisibleTexts(page, 60);
-      appendLog(session, `未找到自动转存按钮，可见文本片段: ${visibleTexts.join(' | ').slice(0, 500)}`);
+      appendLog(session, `未完成外部列表转存三步流程，可见文本片段: ${visibleTexts.join(' | ').slice(0, 500)}`);
       if (!selectedItem.selected) appendLog(session, '推测原因: 未选中分享页中的文件项');
       updateSession(sessionId, {
         status: 'needs_manual_transfer',
