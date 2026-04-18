@@ -732,6 +732,19 @@ async function triggerQuarkTransfer(page, session, detectedFileName) {
   return { clicked: null, selectedItem, targetSelection, method: 'blocked' };
 }
 
+async function captureDriveFileList(page) {
+  return page.evaluate(() => {
+    const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+    const nodes = Array.from(document.querySelectorAll('div, span, p, a'));
+    return nodes
+      .map((node) => norm(node.textContent))
+      .filter(Boolean)
+      .filter((text) => text.length <= 120)
+      .filter((text, index, arr) => arr.indexOf(text) === index)
+      .slice(0, 80);
+  }).catch(() => []);
+}
+
 async function locateFileInDrive(page, fileName, session, options = {}) {
   const normalized = normalizeFileName(fileName);
   if (!normalized) return { found: false, reason: 'empty_name' };
@@ -1054,13 +1067,19 @@ app.post('/api/transfer', async (req, res) => {
     let driveCheck = { found: false, reason: 'skipped' };
 
     if (!transferVerified && detectedFileName) {
-      appendLog(session, '页面成功信号不足，开始进入网盘做二次校验');
+      appendLog(session, '页面成功信号不足，开始进入我的网盘资料仓库做二次校验');
       const verifyPage = await getOrCreatePage(sessionId, 'sharePage');
       await verifyPage.goto(config.homeUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-      await verifyPage.waitForTimeout(2200);
+      await verifyPage.waitForTimeout(2500);
+      if (storageType === 'quark') {
+        const enteredFolder = await openQuarkTargetFolder(verifyPage, session, DEFAULT_TARGET_FOLDER_NAME).catch(() => ({ ok: false }));
+        appendLog(session, enteredFolder?.ok ? '二次校验已进入资料仓库' : '二次校验未能进入资料仓库');
+      }
+      const driveFileList = await captureDriveFileList(verifyPage);
       driveCheck = await locateFileInDrive(verifyPage, detectedFileName, session, { verifyOnly: true });
+      driveCheck.fileList = driveFileList;
       transferVerified = driveCheck.found;
-      appendLog(session, transferVerified ? '已在我的网盘中验证到目标文件' : '未能在我的网盘中验证到目标文件');
+      appendLog(session, transferVerified ? '已在资料仓库中验证到目标文件' : `未能在资料仓库中验证到目标文件，当前文件列表片段: ${driveFileList.join(' | ').slice(0, 300)}`);
     }
 
     updateSession(sessionId, {
