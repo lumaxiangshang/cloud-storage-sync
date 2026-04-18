@@ -465,6 +465,18 @@ async function ensureQuarkTargetFolder(page, session) {
   return { ok: true, folderName, existed: false, confirmed: confirmed || '' };
 }
 
+async function openQuarkTargetFolder(page, session, folderName = DEFAULT_TARGET_FOLDER_NAME) {
+  const located = await locateFileInDrive(page, folderName, session);
+  if (!located.found) {
+    appendLog(session, `未能进入目标文件夹: ${folderName}`);
+    return { ok: false, folderName, reason: 'folder_not_found' };
+  }
+
+  await page.waitForTimeout(1500);
+  appendLog(session, `已进入目标文件夹: ${folderName}`);
+  return { ok: true, folderName, selector: located.selector };
+}
+
 async function parseTransferSuccessContext(page, session) {
   const openSelectors = [
     'text=查看文件',
@@ -783,11 +795,15 @@ app.post('/api/transfer', async (req, res) => {
 
     const folderPage = await getOrCreatePage(sessionId, 'sharePage');
     let targetFolder = null;
+    let targetFolderEntry = null;
     if (storageType === 'quark') {
       await folderPage.goto(config.homeUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
       await folderPage.waitForTimeout(2000);
       targetFolder = await ensureQuarkTargetFolder(folderPage, session);
-      updateSession(sessionId, { targetFolder });
+      if (targetFolder?.ok) {
+        targetFolderEntry = await openQuarkTargetFolder(folderPage, session, targetFolder.folderName);
+      }
+      updateSession(sessionId, { targetFolder, targetFolderEntry });
     }
 
     const page = await getOrCreatePage(sessionId, 'transferPage');
@@ -871,6 +887,7 @@ app.post('/api/transfer', async (req, res) => {
       transferContext,
       driveCheck,
       targetFolder,
+      targetFolderEntry,
       transferEvidence: {
         before: beforeTransferEvidence,
         after: afterTransferEvidence,
@@ -932,6 +949,10 @@ app.post('/api/share', async (req, res) => {
 
     if (!openedFromSuccessPage.opened && session.targetFolder?.folderName) {
       appendLog(session, `分享阶段优先检查固定目录: ${session.targetFolder.folderName}`);
+      const folderEntered = await openQuarkTargetFolder(page, session, session.targetFolder.folderName).catch(() => ({ ok: false }));
+      if (folderEntered?.ok) {
+        appendLog(session, `分享阶段已进入固定目录: ${session.targetFolder.folderName}`);
+      }
     }
 
     if (session.transferPage && !session.transferPage.isClosed()) {
