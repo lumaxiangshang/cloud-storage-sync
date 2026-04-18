@@ -417,6 +417,7 @@ async function extractSharedFileName(page) {
 
 async function ensureQuarkTargetFolder(page, session) {
   const folderName = DEFAULT_TARGET_FOLDER_NAME;
+  appendLog(session, `开始在已登录网盘根目录检查/创建文件夹: ${folderName}`);
 
   const existing = await locateFileInDrive(page, folderName, session, { verifyOnly: true }).catch(() => ({ found: false }));
   if (existing?.found) {
@@ -797,13 +798,16 @@ app.post('/api/transfer', async (req, res) => {
     let targetFolder = null;
     let targetFolderEntry = null;
     if (storageType === 'quark') {
+      appendLog(session, '先进入已登录账号自己的网盘主页，准备创建/进入资料仓库');
       await folderPage.goto(config.homeUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-      await folderPage.waitForTimeout(2000);
+      await folderPage.waitForTimeout(3000);
+      const ownerDriveState = await capturePageEvidence(folderPage, 'owner_drive_root');
+      appendLog(session, `当前目录页证据: ${ownerDriveState.title} | ${ownerDriveState.url}`);
       targetFolder = await ensureQuarkTargetFolder(folderPage, session);
       if (targetFolder?.ok) {
         targetFolderEntry = await openQuarkTargetFolder(folderPage, session, targetFolder.folderName);
       }
-      updateSession(sessionId, { targetFolder, targetFolderEntry });
+      updateSession(sessionId, { targetFolder, targetFolderEntry, ownerDriveState });
     }
 
     const page = await getOrCreatePage(sessionId, 'transferPage');
@@ -947,24 +951,23 @@ app.post('/api/share', async (req, res) => {
     const page = await getOrCreatePage(sessionId, 'sharePage');
     let openedFromSuccessPage = { opened: false };
 
-    if (!openedFromSuccessPage.opened && session.targetFolder?.folderName) {
-      appendLog(session, `分享阶段优先检查固定目录: ${session.targetFolder.folderName}`);
-      const folderEntered = await openQuarkTargetFolder(page, session, session.targetFolder.folderName).catch(() => ({ ok: false }));
-      if (folderEntered?.ok) {
-        appendLog(session, `分享阶段已进入固定目录: ${session.targetFolder.folderName}`);
-      }
-    }
-
     if (session.transferPage && !session.transferPage.isClosed()) {
       appendLog(session, '优先尝试从转存成功页直接进入目标文件');
       openedFromSuccessPage = await openTransferredTarget(session.transferPage, session);
     }
 
     if (!openedFromSuccessPage.opened) {
-      appendLog(session, '准备进入我的网盘首页');
+      appendLog(session, '准备进入已登录账号自己的网盘首页');
       await page.goto(config.homeUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-      await page.waitForTimeout(2500);
-      appendLog(session, '已进入我的网盘首页');
+      await page.waitForTimeout(3000);
+      appendLog(session, '已进入已登录账号自己的网盘首页');
+      if (actualStorage === 'quark' && session.targetFolder?.folderName) {
+        appendLog(session, `分享阶段优先进入固定目录: ${session.targetFolder.folderName}`);
+        const folderEntered = await openQuarkTargetFolder(page, session, session.targetFolder.folderName).catch(() => ({ ok: false }));
+        if (folderEntered?.ok) {
+          appendLog(session, `分享阶段已进入固定目录: ${session.targetFolder.folderName}`);
+        }
+      }
     } else {
       appendLog(session, '已从转存成功页进入后续页面');
     }
