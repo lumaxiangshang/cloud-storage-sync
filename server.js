@@ -264,7 +264,7 @@ async function extractShareLink(page, storageType) {
 }
 
 async function extractSharedFileName(page) {
-  const rejectPattern = /^(全部文件|最近|分享|下载|登录|夸克网盘|保存到网盘|首页|文件|更多|用户|我的网盘|夸克网盘分享)$/;
+  const rejectPattern = /^(全部文件|最近|分享|下载|登录|夸克网盘|保存到网盘|首页|文件|更多|用户|我的网盘|夸克网盘分享|查看|打开目录|前往网盘)$/;
   const selectors = [
     '[class*="filename"]',
     '[class*="file-name"]',
@@ -303,18 +303,27 @@ async function parseTransferSuccessContext(page, session) {
     'button:has-text("查看文件")',
     'button:has-text("前往网盘")'
   ];
+  const successTexts = ['保存成功', '已保存到网盘', '转存成功', '已添加到网盘'];
+
+  for (const text of successTexts) {
+    try {
+      await page.locator(`text=${text}`).first().waitFor({ state: 'visible', timeout: 1200 });
+      appendLog(session, `发现转存成功提示: ${text}`);
+      return { found: true, verified: true, source: 'success_text', text };
+    } catch {}
+  }
 
   for (const selector of openSelectors) {
     try {
       const locator = page.locator(selector).first();
-      await locator.waitFor({ state: 'visible', timeout: 1500 });
+      await locator.waitFor({ state: 'visible', timeout: 1200 });
       appendLog(session, `发现成功页入口: ${selector}`);
-      return { found: true, selector };
+      return { found: true, verified: false, source: 'open_entry', selector };
     } catch {}
   }
 
-  appendLog(session, '未发现成功页入口');
-  return { found: false };
+  appendLog(session, '未发现可验证的转存成功信号');
+  return { found: false, verified: false };
 }
 
 async function openTransferredTarget(page, session) {
@@ -351,49 +360,67 @@ async function openTransferredTarget(page, session) {
   return { opened: false };
 }
 
-async function locateFileInDrive(page, fileName, session) {
+async function locateFileInDrive(page, fileName, session, options = {}) {
   const normalized = normalizeFileName(fileName);
   if (!normalized) return { found: false, reason: 'empty_name' };
 
   appendLog(session, `开始定位网盘文件: ${normalized}`);
 
+  const candidateNames = Array.from(new Set([
+    normalized,
+    normalized.replace(/^上传到当前目录/, '').trim(),
+    normalized.replace(/^上传到同级目录/, '').trim(),
+    normalized.split(/[·\-|｜]/)[0].trim()
+  ].filter(Boolean)));
+
   const searchSelectors = [
     'input[placeholder*="搜索"]',
     'input[placeholder*="文件"]',
-    'input[type="search"]'
+    'input[type="search"]',
+    '[contenteditable="true"]'
   ];
 
-  for (const selector of searchSelectors) {
-    try {
-      appendLog(session, `尝试搜索框: ${selector}`);
-      const input = page.locator(selector).first();
-      await input.fill('', { timeout: 1500 });
-      await input.fill(normalized, { timeout: 1500 });
-      await page.keyboard.press('Enter').catch(() => {});
-      await page.waitForTimeout(2000);
-      appendLog(session, `已执行搜索: ${normalized}`);
-      break;
-    } catch (error) {
-      appendLog(session, `搜索框不可用: ${selector}`);
+  for (const keyword of candidateNames) {
+    for (const selector of searchSelectors) {
+      try {
+        appendLog(session, `尝试搜索框: ${selector} -> ${keyword}`);
+        const input = page.locator(selector).first();
+        await input.click({ timeout: 1200 });
+        await input.fill ? await input.fill('') : await page.keyboard.press('Control+A').catch(() => {});
+        if (input.fill) {
+          await input.fill(keyword, { timeout: 1500 });
+        } else {
+          await page.keyboard.type(keyword, { delay: 50 });
+        }
+        await page.keyboard.press('Enter').catch(() => {});
+        await page.waitForTimeout(1800);
+        appendLog(session, `已执行搜索: ${keyword}`);
+        break;
+      } catch {
+        appendLog(session, `搜索框不可用: ${selector}`);
+      }
     }
-  }
 
-  const rowSelectors = [
-    `text=${normalized}`,
-    `[title="${normalized.replace(/"/g, '\\"')}"]`,
-    `[aria-label*="${normalized.replace(/"/g, '\\"')}"]`
-  ];
+    const rowSelectors = [
+      `text=${keyword}`,
+      `text=${keyword.slice(0, Math.min(keyword.length, 18))}`,
+      `[title="${keyword.replace(/"/g, '\\"')}"]`,
+      `[aria-label*="${keyword.replace(/"/g, '\\"')}"]`
+    ];
 
-  for (const selector of rowSelectors) {
-    try {
-      appendLog(session, `尝试定位文件节点: ${selector}`);
-      const target = page.locator(selector).first();
-      await target.waitFor({ state: 'visible', timeout: 2000 });
-      await target.click({ timeout: 2000 });
-      await page.waitForTimeout(1200);
-      return { found: true, selector };
-    } catch {
-      appendLog(session, `未命中文件节点: ${selector}`);
+    for (const selector of rowSelectors) {
+      try {
+        appendLog(session, `尝试定位文件节点: ${selector}`);
+        const target = page.locator(selector).first();
+        await target.waitFor({ state: 'visible', timeout: 1800 });
+        if (!options.verifyOnly) {
+          await target.click({ timeout: 1800 });
+          await page.waitForTimeout(1000);
+        }
+        return { found: true, selector, matchedName: keyword };
+      } catch {
+        appendLog(session, `未命中文件节点: ${selector}`);
+      }
     }
   }
 
@@ -575,16 +602,34 @@ app.post('/api/transfer', async (req, res) => {
 
     await page.waitForTimeout(2500);
     const transferContext = await parseTransferSuccessContext(page, session);
-    updateSession(sessionId, {
-      transferCompleted: true,
-      transferContext,
-      status: 'transfer_done',
-      phase: 'transfer',
-      message: transferContext.found ? '转存完成，已识别到成功页入口，准备继续分享' : '转存动作已执行，请确认浏览器里文件是否已进入你的网盘'
-    });
-    appendLog(session, transferContext.found ? '自动转存完成，并识别到成功页入口' : '自动转存流程已完成，等待分享');
 
-    res.json({ success: true, manual: false, session: ensureSession(sessionId) });
+    let transferVerified = Boolean(transferContext.verified);
+    let driveCheck = { found: false, reason: 'skipped' };
+
+    if (!transferVerified && detectedFileName) {
+      appendLog(session, '页面成功信号不足，开始进入网盘做二次校验');
+      const verifyPage = await getOrCreatePage(sessionId, 'sharePage');
+      await verifyPage.goto(config.homeUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+      await verifyPage.waitForTimeout(2200);
+      driveCheck = await locateFileInDrive(verifyPage, detectedFileName, session, { verifyOnly: true });
+      transferVerified = driveCheck.found;
+      appendLog(session, transferVerified ? '已在我的网盘中验证到目标文件' : '未能在我的网盘中验证到目标文件');
+    }
+
+    updateSession(sessionId, {
+      transferCompleted: transferVerified,
+      transferVerified,
+      transferContext,
+      driveCheck,
+      status: transferVerified ? 'transfer_done' : 'transfer_unverified',
+      phase: 'transfer',
+      message: transferVerified
+        ? '转存已验证成功，可以继续分享'
+        : '已执行转存点击，但未验证文件真的进入网盘，请先人工确认，不自动进入分享阶段'
+    });
+    appendLog(session, transferVerified ? '自动转存完成，并通过校验' : '转存结果未通过校验，已阻止进入自动分享');
+
+    res.json({ success: true, manual: !transferVerified, verified: transferVerified, session: ensureSession(sessionId) });
   } catch (error) {
     console.error('Transfer error:', error);
     res.status(500).json({ success: false, error: error.message });

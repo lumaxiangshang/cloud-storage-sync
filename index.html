@@ -106,7 +106,7 @@
             storageType: selectedStorage,
             sessionId
           });
-          if (!data.manual) setStep(3);
+          if (data.verified) setStep(3);
         } catch (error) {
           setMessage('错误: ' + error.message);
         } finally {
@@ -224,7 +224,8 @@
                   <div className="p-4 bg-blue-500/20 rounded-xl border border-blue-400/30 text-blue-100 text-sm leading-7">
                     1. 点“打开浏览器登录”<br />
                     2. 在弹出的浏览器里完成登录<br />
-                    3. 点“检查是否已登录”，系统会继续后续步骤
+                    3. 点“检查是否已登录”，系统会继续后续步骤<br />
+                    4. 现在只有真正校验到文件进入网盘，才会进入分享阶段
                   </div>
                   <div className="flex gap-4">
                     <button onClick={handleOpenLogin} disabled={isProcessing} className="flex-1 py-4 bg-purple-600 text-white rounded-xl hover:bg-purple-700 disabled:opacity-50 font-semibold">
@@ -254,7 +255,7 @@
                     </button>
                   </div>
                   <button onClick={confirmTransfer} disabled={isProcessing} className="w-full py-3 bg-amber-600 text-white rounded-xl hover:bg-amber-700 disabled:opacity-50">
-                    浏览器里已手动完成转存
+                    浏览器里已确认文件真的转存成功
                   </button>
                 </>
               )}
@@ -263,6 +264,7 @@
                 <>
                   <h2 className="text-2xl font-semibold text-center text-white">生成分享链接</h2>
                   <div className="p-4 bg-green-500/20 rounded-xl border border-green-400/30 text-green-100 text-sm leading-7">
+                    只有在转存已验证成功后，系统才会进入这里。<br />
                     系统会先尝试自动点分享并自动提取链接。<br />
                     如果没点到，你只需要在浏览器里选中文件后手动点“分享”，然后回来点“提取分享链接”。<br />
                     即使服务重启，最近一次任务状态也会保存在本地，不会直接丢失。
