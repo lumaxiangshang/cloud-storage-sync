@@ -33,6 +33,7 @@
       const [sessionId] = useState(generateSessionId());
       const [status, setStatus] = useState(null);
       const [loginDebug, setLoginDebug] = useState(null);
+      const [transferDebug, setTransferDebug] = useState(null);
 
       const currentStorage = useMemo(
         () => storageOptions.find(s => s.value === selectedStorage),
@@ -62,7 +63,8 @@
 
       useEffect(() => {
         if (status?.loginState) setLoginDebug(status.loginState);
-      }, [status?.loginState]);
+        if (status?.transferEvidence) setTransferDebug(status.transferEvidence);
+      }, [status?.loginState, status?.transferEvidence]);
 
       const postJson = async (url, body) => {
         const response = await fetch(url, {
@@ -344,6 +346,19 @@
                 <div>Cookie 数量: {loginDebug.cookieCount}</div>
                 <div>当前页面: {loginDebug.title} | {loginDebug.url}</div>
                 <div>Cookie 预览: {(loginDebug.cookies || []).map(c => `${c.name}=${c.valuePreview}`).join(' ; ') || 'none'}</div>
+              </div>
+            )}
+
+            {transferDebug && (
+              <div className="mt-6 bg-amber-950/40 border border-amber-400/20 rounded-2xl p-4 text-xs text-amber-100 space-y-2">
+                <div className="text-sm font-semibold text-white">转存调试</div>
+                <div>点击的按钮: {transferDebug.clicked || 'none'}</div>
+                <div>确认按钮: {transferDebug.confirmed || 'none'}</div>
+                <div>URL 变化: {String(transferDebug.diff?.urlChanged)}</div>
+                <div>标题变化: {String(transferDebug.diff?.titleChanged)}</div>
+                <div>新增文本: {(transferDebug.diff?.addedTexts || []).join(' | ') || 'none'}</div>
+                <div>转存前页面: {transferDebug.before?.title} | {transferDebug.before?.url}</div>
+                <div>转存后页面: {transferDebug.after?.title} | {transferDebug.after?.url}</div>
               </div>
             )}
 

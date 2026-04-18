@@ -243,6 +243,36 @@ async function collectVisibleTexts(page, limit = 80) {
   }, limit).catch(() => []);
 }
 
+async function capturePageEvidence(page, label = '') {
+  const url = page.url();
+  const title = await page.title().catch(() => '');
+  const visibleTexts = await collectVisibleTexts(page, 80);
+  const controls = await page.locator('button, a, [role="button"]').evaluateAll((nodes) =>
+    nodes.slice(0, 80).map((node) => ({
+      text: (node.textContent || '').trim(),
+      title: node.getAttribute('title') || '',
+      ariaLabel: node.getAttribute('aria-label') || '',
+      cls: node.className || ''
+    }))
+  ).catch(() => []);
+  return { label, url, title, visibleTexts, controls };
+}
+
+function diffEvidence(before, after) {
+  const beforeTexts = new Set((before?.visibleTexts || []).map((item) => item.trim()).filter(Boolean));
+  const afterTexts = new Set((after?.visibleTexts || []).map((item) => item.trim()).filter(Boolean));
+  const addedTexts = Array.from(afterTexts).filter((item) => !beforeTexts.has(item)).slice(0, 30);
+  const removedTexts = Array.from(beforeTexts).filter((item) => !afterTexts.has(item)).slice(0, 30);
+  return {
+    beforeUrl: before?.url || '',
+    afterUrl: after?.url || '',
+    urlChanged: (before?.url || '') !== (after?.url || ''),
+    titleChanged: (before?.title || '') !== (after?.title || ''),
+    addedTexts,
+    removedTexts
+  };
+}
+
 async function selectSharedFileItem(page, fileName, session) {
   const candidates = [];
   const normalized = normalizeFileName(fileName);
@@ -721,6 +751,7 @@ app.post('/api/transfer', async (req, res) => {
       return res.json({ success: true, manual: true, session: ensureSession(sessionId) });
     }
 
+    const beforeTransferEvidence = await capturePageEvidence(page, 'before_transfer_click');
     appendLog(session, `已点击按钮: ${clicked}`);
     await page.waitForTimeout(1500);
 
@@ -731,6 +762,9 @@ app.post('/api/transfer', async (req, res) => {
     if (confirmed) appendLog(session, `已点击确认按钮: ${confirmed}`);
 
     await page.waitForTimeout(2500);
+    const afterTransferEvidence = await capturePageEvidence(page, 'after_transfer_click');
+    const transferEvidenceDiff = diffEvidence(beforeTransferEvidence, afterTransferEvidence);
+    appendLog(session, `转存页面变化: urlChanged=${transferEvidenceDiff.urlChanged}, titleChanged=${transferEvidenceDiff.titleChanged}, added=${transferEvidenceDiff.addedTexts.join(' | ').slice(0, 200) || 'none'}`);
     const transferContext = await parseTransferSuccessContext(page, session);
 
     let transferVerified = Boolean(transferContext.verified);
@@ -751,6 +785,13 @@ app.post('/api/transfer', async (req, res) => {
       transferVerified,
       transferContext,
       driveCheck,
+      transferEvidence: {
+        before: beforeTransferEvidence,
+        after: afterTransferEvidence,
+        diff: transferEvidenceDiff,
+        clicked,
+        confirmed: confirmed || ''
+      },
       status: transferVerified ? 'transfer_done' : 'transfer_unverified',
       phase: 'transfer',
       message: transferVerified
