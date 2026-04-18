@@ -60,6 +60,10 @@
         return () => clearInterval(timer);
       }, []);
 
+      useEffect(() => {
+        if (status?.loginState) setLoginDebug(status.loginState);
+      }, [status?.loginState]);
+
       const postJson = async (url, body) => {
         const response = await fetch(url, {
           method: 'POST',
@@ -79,6 +83,7 @@
         setIsProcessing(true);
         try {
           await postJson('/api/login', { storageType: selectedStorage, sessionId });
+          setMessage('浏览器已打开，我会自动轮询 cookie 和登录态，不用你反复点');
         } catch (error) {
           setMessage('错误: ' + error.message);
         } finally {
@@ -106,6 +111,20 @@
           if (!response.ok || !data.success) throw new Error(data.error || '获取登录调试信息失败');
           setLoginDebug(data.loginState);
           setMessage(data.loginState.loggedIn ? '已抓到 cookie 并通过登录校验' : '还没通过真实登录校验，请看下方调试信息');
+        } catch (error) {
+          setMessage('错误: ' + error.message);
+        } finally {
+          setIsProcessing(false);
+        }
+      };
+
+      const autoVerifyLogin = async () => {
+        setIsProcessing(true);
+        try {
+          const data = await postJson('/api/auto-verify-login', { sessionId });
+          setLoginDebug(data.loginState);
+          setMessage(data.loginState.loggedIn ? '已自动抓 cookie 并确认登录成功' : '自动抓 cookie 后仍未确认登录成功');
+          if (data.loginState.loggedIn) setStep(2);
         } catch (error) {
           setMessage('错误: ' + error.message);
         } finally {
@@ -252,6 +271,9 @@
                     </button>
                     <button onClick={debugLogin} disabled={isProcessing} className="flex-1 py-4 bg-sky-600 text-white rounded-xl hover:bg-sky-700 disabled:opacity-50 font-semibold">
                       🍪 抓 Cookie 看登录态
+                    </button>
+                    <button onClick={autoVerifyLogin} disabled={isProcessing} className="flex-1 py-4 bg-cyan-600 text-white rounded-xl hover:bg-cyan-700 disabled:opacity-50 font-semibold">
+                      🤖 立即自动校验登录
                     </button>
                   </div>
                 </>

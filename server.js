@@ -590,30 +590,31 @@ app.post('/api/login', async (req, res) => {
     await page.goto(config.homeUrl, { waitUntil: 'domcontentloaded' });
     appendLog(session, `已打开 ${config.name} 首页`);
 
-    setTimeout(async () => {
+    const pollLoginState = async (attempt = 1) => {
       try {
         const loginState = await verifyLoginState(sessionId, storageType);
-        if (loginState.loggedIn) {
-          updateSession(sessionId, {
-            isLoggedIn: true,
-            loginState,
-            status: 'ready_for_transfer',
-            phase: 'login',
-            message: `${config.name} 已检测到真实登录，可以继续转存`
-          });
-          appendLog(session, `已自动检测到登录成功，cookie=${loginState.cookieCount}`);
-        } else {
-          updateSession(sessionId, {
-            isLoggedIn: false,
-            loginState,
-            message: `请在浏览器中完成${config.name}登录，当前未通过真实登录校验`
-          });
-          appendLog(session, `等待用户手动登录，selector=${loginState.selectorCheck?.evidence || 'none'}, cookie=${loginState.cookieCount}`);
+        updateSession(sessionId, {
+          isLoggedIn: loginState.loggedIn,
+          loginState,
+          status: loginState.loggedIn ? 'ready_for_transfer' : 'waiting_login',
+          phase: 'login',
+          message: loginState.loggedIn
+            ? `${config.name} 已检测到真实登录，可以继续转存`
+            : `正在等待${config.name}登录完成，已自动校验 ${attempt} 次`
+        });
+        appendLog(session, loginState.loggedIn
+          ? `自动校验登录成功，selector=${loginState.selectorCheck?.evidence || 'none'}, cookie=${loginState.cookieCount}`
+          : `自动校验登录未完成，第${attempt}次，selector=${loginState.selectorCheck?.evidence || 'none'}, cookie=${loginState.cookieCount}`);
+
+        if (!loginState.loggedIn && attempt < 10) {
+          setTimeout(() => pollLoginState(attempt + 1), 2500);
         }
       } catch (error) {
         appendLog(session, `登录检测失败: ${error.message}`);
       }
-    }, 2500);
+    };
+
+    setTimeout(() => pollLoginState(1), 1500);
 
     res.json({
       success: true,
@@ -895,6 +896,31 @@ app.post('/api/fetch-share-link', async (req, res) => {
     appendLog(session, `手动补提取成功: ${shareResult}`);
 
     res.json({ success: true, shareUrl: shareResult, session: ensureSession(sessionId) });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+app.post('/api/auto-verify-login', async (req, res) => {
+  try {
+    const { sessionId } = req.body;
+    const session = ensureSession(sessionId);
+    if (!session.storageType) {
+      return res.status(400).json({ success: false, error: '当前 session 还没有选定网盘' });
+    }
+
+    const loginState = await verifyLoginState(sessionId, session.storageType);
+    updateSession(sessionId, {
+      isLoggedIn: loginState.loggedIn,
+      loginState,
+      status: loginState.loggedIn ? 'ready_for_transfer' : 'waiting_login',
+      phase: 'login',
+      message: loginState.loggedIn ? '自动真实登录校验通过' : '自动真实登录校验未通过'
+    });
+    appendLog(session, loginState.loggedIn
+      ? `手动触发自动登录校验成功，cookie=${loginState.cookieCount}`
+      : `手动触发自动登录校验失败，cookie=${loginState.cookieCount}`);
+    res.json({ success: true, loginState, session: ensureSession(sessionId) });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
