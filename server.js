@@ -2,6 +2,7 @@ const express = require('express');
 const { chromium } = require('playwright');
 const cors = require('cors');
 const path = require('path');
+const { execSync } = require('child_process');
 
 const app = express();
 const PORT = 3000;
@@ -15,6 +16,18 @@ const fs = require('fs');
 const browserContexts = new Map();
 const sessions = new Map();
 const SESSION_STORE_PATH = path.join(__dirname, 'runtime-sessions.json');
+
+function getBuildInfo() {
+  try {
+    const commit = execSync('git rev-parse --short HEAD', { cwd: __dirname, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+    const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: __dirname, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
+    return { commit, branch, startedAt: new Date().toISOString() };
+  } catch {
+    return { commit: 'unknown', branch: 'unknown', startedAt: new Date().toISOString() };
+  }
+}
+
+const BUILD_INFO = getBuildInfo();
 
 const STORAGE_CONFIG = {
   baidu: {
@@ -586,6 +599,17 @@ async function tryShareFlow(page, config, storageType, session) {
   return { ok: Boolean(shareResult), shareClicked, copyClicked, shareResult };
 }
 
+app.get('/api/health', async (req, res) => {
+  res.json({
+    success: true,
+    service: 'pantools',
+    port: PORT,
+    build: BUILD_INFO,
+    activeSessions: sessions.size,
+    activeBrowsers: browserContexts.size
+  });
+});
+
 app.get('/api/status', async (req, res) => {
   const { sessionId } = req.query;
   const session = ensureSession(sessionId);
@@ -598,7 +622,7 @@ app.get('/api/status', async (req, res) => {
     } catch {}
   }
 
-  res.json({ success: true, session });
+  res.json({ success: true, session, build: BUILD_INFO });
 });
 
 app.post('/api/login', async (req, res) => {
@@ -1066,6 +1090,9 @@ app.listen(PORT, () => {
 ║   🚀 PanTools - 网盘转存工具                              ║
 ║                                                           ║
 ║   服务已启动: http://localhost:${PORT}                    ║
+║   Branch: ${BUILD_INFO.branch}
+║   Commit: ${BUILD_INFO.commit}
+║   Started: ${BUILD_INFO.startedAt}
 ║                                                           ║
 ║   当前状态: 半自动闭环版                                  ║
 ║   登录检测 / 转存状态 / 分享提取 已接通                   ║

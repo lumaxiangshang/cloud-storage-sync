@@ -34,6 +34,7 @@
       const [status, setStatus] = useState(null);
       const [loginDebug, setLoginDebug] = useState(null);
       const [transferDebug, setTransferDebug] = useState(null);
+      const [health, setHealth] = useState(null);
 
       const currentStorage = useMemo(
         () => storageOptions.find(s => s.value === selectedStorage),
@@ -41,8 +42,11 @@
       );
 
       const refreshStatus = async () => {
-        const response = await fetch(`/api/status?sessionId=${encodeURIComponent(sessionId)}`);
-        const data = await response.json();
+        const [statusRes, healthRes] = await Promise.all([
+          fetch(`/api/status?sessionId=${encodeURIComponent(sessionId)}`),
+          fetch('/api/health').catch(() => null)
+        ]);
+        const data = await statusRes.json();
         if (data.success) {
           setStatus(data.session);
           setMessage(data.session.message || '');
@@ -52,6 +56,12 @@
             setResultUrl(data.session.shareResult);
             setStep(4);
           }
+        }
+        if (healthRes && healthRes.ok) {
+          const healthData = await healthRes.json();
+          setHealth(healthData);
+        } else {
+          setHealth({ success: false });
         }
       };
 
@@ -215,11 +225,17 @@
               <p className="text-purple-200">网盘转存并生成分享链接</p>
             </div>
 
-            <div className="bg-white/10 border border-white/20 rounded-2xl p-4 mb-6 text-sm text-white/90">
+            <div className="bg-white/10 border border-white/20 rounded-2xl p-4 mb-6 text-sm text-white/90 space-y-3">
               <div className="flex flex-wrap items-center gap-3 justify-between">
                 <div>当前网盘: {currentStorage?.icon} {currentStorage?.label}</div>
                 <div className="px-3 py-1 rounded-full bg-purple-500/30 border border-purple-300/30">状态: {statusBadge}</div>
               </div>
+              {health && (
+                <div className={`text-xs rounded-xl px-3 py-2 border ${health.success ? 'bg-emerald-500/20 border-emerald-400/30 text-emerald-100' : 'bg-red-500/20 border-red-400/30 text-red-100'}`}>
+                  服务在线: {String(Boolean(health.success))}
+                  {health.build ? ` | Branch: ${health.build.branch} | Commit: ${health.build.commit}` : ''}
+                </div>
+              )}
               {message && <div className="mt-3 text-purple-100">{message}</div>}
             </div>
 
