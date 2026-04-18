@@ -80,6 +80,7 @@ function sanitizeSession(session) {
   const copy = { ...session };
   delete copy.mainPage;
   delete copy.transferPage;
+  delete copy.sharePage;
   return copy;
 }
 
@@ -243,17 +244,23 @@ function normalizeFileName(name = '') {
     .trim();
 }
 
-async function extractShareLink(page) {
-  const urlCandidates = await page.locator('input, textarea, a, span, div').evaluateAll((nodes) => {
-    const values = [];
+async function extractShareLink(page, storageType) {
+  const patterns = STORAGE_CONFIG[storageType]?.linkPatterns || [/https?:\/\//i];
+  const values = await page.locator('input, textarea, a, span, div').evaluateAll((nodes) => {
+    const items = [];
     for (const node of nodes) {
-      const val = node.value || node.href || node.textContent || '';
-      if (/https?:\/\//i.test(val)) values.push(String(val).trim());
+      const parts = [node.value, node.href, node.textContent];
+      for (const part of parts) {
+        if (typeof part === 'string' && /https?:\/\//i.test(part)) {
+          items.push(part.trim());
+        }
+      }
     }
-    return values;
+    return items;
   }).catch(() => []);
 
-  return urlCandidates.find((item) => /https?:\/\//i.test(item)) || '';
+  const unique = Array.from(new Set(values.map((item) => item.replace(/\s+/g, ' ').trim())));
+  return unique.find((item) => patterns.some((pattern) => pattern.test(item))) || unique[0] || '';
 }
 
 async function extractSharedFileName(page) {
@@ -393,14 +400,19 @@ async function locateFileInDrive(page, fileName, session) {
   return { found: false, reason: 'file_not_found' };
 }
 
-async function tryShareFlow(page, config) {
+async function tryShareFlow(page, config, storageType, session) {
   const shareClicked = await safeClick(page, config.shareButtons, 2500);
   if (!shareClicked) return { ok: false, stage: 'share_button' };
 
   await page.waitForTimeout(2000);
   await safeClick(page, ['text=全部', 'text=公开', 'text=创建链接', 'button:has-text("创建分享")'], 1500);
   const copyClicked = await safeClick(page, config.copyButtons, 2500);
-  const shareResult = await extractShareLink(page);
+  await page.waitForTimeout(1200);
+  const shareResult = await extractShareLink(page, storageType);
+  if (!shareResult) {
+    const visibleTexts = await collectVisibleTexts(page, 50);
+    appendLog(session, `分享弹层中未抓到链接，可见文本: ${visibleTexts.join(' | ').slice(0, 300)}`);
+  }
   return { ok: Boolean(shareResult), shareClicked, copyClicked, shareResult };
 }
 
@@ -645,7 +657,9 @@ app.post('/api/share', async (req, res) => {
     }
 
     appendLog(session, '开始尝试执行分享动作');
-    const shareAttempt = await tryShareFlow(openedFromSuccessPage.opened ? session.transferPage : page, config);
+    const activePage = openedFromSuccessPage.opened ? session.transferPage : page;
+    session.sharePage = activePage;
+    const shareAttempt = await tryShareFlow(activePage, config, actualStorage, session);
     if (shareAttempt.shareClicked) appendLog(session, `已点击分享按钮: ${shareAttempt.shareClicked}`);
     if (shareAttempt.copyClicked) appendLog(session, `已点击复制链接按钮: ${shareAttempt.copyClicked}`);
 
@@ -684,9 +698,15 @@ app.post('/api/fetch-share-link', async (req, res) => {
   try {
     const { sessionId } = req.body;
     const session = ensureSession(sessionId);
-    const page = await getOrCreatePage(sessionId);
+    const page = session.sharePage && !session.sharePage.isClosed()
+      ? session.sharePage
+      : session.transferPage && !session.transferPage.isClosed()
+        ? session.transferPage
+        : session.mainPage && !session.mainPage.isClosed()
+          ? session.mainPage
+          : await getOrCreatePage(sessionId);
 
-    const shareResult = await extractShareLink(page);
+    const shareResult = await extractShareLink(page, session.storageType);
     if (!shareResult) {
       appendLog(session, '未提取到分享链接');
       return res.status(400).json({ success: false, error: '当前页面没抓到分享链接，请先在浏览器里完成分享' });
