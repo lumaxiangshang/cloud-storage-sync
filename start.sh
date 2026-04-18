@@ -9,9 +9,14 @@ echo "🌿 Branch: $(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown
 echo "🧩 Commit: $(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
 echo ""
 
-if [ ! -d "node_modules" ]; then
+echo "📦 检查依赖..."
+if [ ! -d "node_modules" ] || [ ! -d "node_modules/express" ]; then
   echo "📦 安装依赖..."
-  npm install
+  if command -v pnpm >/dev/null 2>&1; then
+    pnpm install
+  else
+    npm install
+  fi
 fi
 
 echo "🌐 检查 Playwright Chromium..."
