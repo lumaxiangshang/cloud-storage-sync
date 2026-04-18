@@ -581,6 +581,19 @@ async function detectQuarkSaveControls(page, session) {
   return controls;
 }
 
+async function getQuarkTransferPathState(page) {
+  return page.evaluate(() => {
+    const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+    const node = document.querySelector('.path-name[title]') || Array.from(document.querySelectorAll('div.path-name, .path-name')).find(Boolean);
+    if (!node) return { exists: false, title: '', text: '' };
+    return {
+      exists: true,
+      title: node.getAttribute('title') || '',
+      text: norm(node.textContent)
+    };
+  }).catch(() => ({ exists: false, title: '', text: '' }));
+}
+
 async function chooseQuarkTransferTarget(page, session, folderName = DEFAULT_TARGET_FOLDER_NAME) {
   appendLog(session, `准备在分享页底部“转存至”区域指定目录: ${folderName}`);
 
@@ -608,7 +621,14 @@ async function chooseQuarkTransferTarget(page, session, folderName = DEFAULT_TAR
   }
 
   const dialogState = await capturePageEvidence(page, 'after-open-transfer-target');
+  const beforePath = await getQuarkTransferPathState(page);
   appendLog(session, `转存目录弹层证据: ${dialogState.title} | ${dialogState.url}`);
+  appendLog(session, `当前转存路径: title=${beforePath.title || 'none'}, text=${beforePath.text || 'none'}`);
+
+  if ((beforePath.title || beforePath.text).includes(folderName)) {
+    appendLog(session, `路径校验通过: ${beforePath.title || beforePath.text}`);
+    return { ok: true, folderName, selector: 'path-already-selected', pickerInfo, dialogState, pathState: beforePath };
+  }
 
   const folderPicked = await page.evaluate((folderName) => {
     const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
@@ -628,8 +648,10 @@ async function chooseQuarkTransferTarget(page, session, folderName = DEFAULT_TAR
 
   if (folderPicked) {
     await page.waitForTimeout(1000);
+    const afterPickPath = await getQuarkTransferPathState(page);
     appendLog(session, `已在转存目录选择中命中: ${folderPicked.text}`);
-    return { ok: true, folderName, selector: folderPicked.text, pickerInfo, dialogState };
+    appendLog(session, `路径变更后校验: title=${afterPickPath.title || 'none'}, text=${afterPickPath.text || 'none'}`);
+    return { ok: (afterPickPath.title || afterPickPath.text).includes(folderName), folderName, selector: folderPicked.text, pickerInfo, dialogState, pathState: afterPickPath };
   }
 
   const createFolderClicked = await safeClickByText(page, ['新建文件夹', '新建'], session, { exact: false, maxTextLength: 20, preferLast: true });
@@ -656,34 +678,16 @@ async function chooseQuarkTransferTarget(page, session, folderName = DEFAULT_TAR
         await page.waitForTimeout(1200);
         appendLog(session, `已在转存目录弹层中创建资料仓库并确认`);
 
-        const createdFolderPicked = await page.evaluate((folderName) => {
-          const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
-          const nodes = Array.from(document.querySelectorAll('div, span, p, li, button'));
-          const target = nodes.find((node) => {
-            const text = norm(node.textContent);
-            return text === folderName || text.endsWith('/' + folderName) || text.includes(folderName);
-          });
-          if (!target) return null;
-          const rect = target.getBoundingClientRect();
-          const x = rect.left + rect.width / 2;
-          const y = rect.top + rect.height / 2;
-          const el = document.elementFromPoint(x, y);
-          if (el) el.click();
-          return { text: norm(target.textContent), x, y };
-        }, folderName).catch(() => null);
+        const afterCreatePath = await getQuarkTransferPathState(page);
+        appendLog(session, `新建后路径校验: title=${afterCreatePath.title || 'none'}, text=${afterCreatePath.text || 'none'}`);
 
-        if (createdFolderPicked) {
-          await page.waitForTimeout(1000);
-          appendLog(session, `新建后已重新命中资料仓库: ${createdFolderPicked.text}`);
-        }
-
-        return { ok: true, folderName, selector: 'created-folder', pickerInfo, dialogState, createdFolderPicked };
+        return { ok: (afterCreatePath.title || afterCreatePath.text).includes(folderName), folderName, selector: 'created-folder', pickerInfo, dialogState, pathState: afterCreatePath };
       }
     }
   }
 
   appendLog(session, `未能在转存目录选择中命中: ${folderName}`);
-  return { ok: false, folderName, reason: 'target_folder_not_selected', pickerInfo, dialogState };
+  return { ok: false, folderName, reason: 'target_folder_not_selected', pickerInfo, dialogState, pathState: beforePath };
 }
 
 async function triggerQuarkTransfer(page, session, detectedFileName) {
