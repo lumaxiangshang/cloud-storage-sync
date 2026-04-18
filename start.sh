@@ -15,17 +15,23 @@ if [ ! -d "node_modules" ]; then
 fi
 
 echo "🌐 检查 Playwright Chromium..."
-npx playwright install chromium >/dev/null 2>&1 || true
+PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=${PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD:-1}
+export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
+if command -v npx >/dev/null 2>&1; then
+  timeout 20s npx playwright install chromium >/tmp/pantools-playwright.log 2>&1 || true
+fi
 
 echo "🧹 清理旧的本地服务进程..."
-pkill -f "node server.js" || true
+if command -v pkill >/dev/null 2>&1; then
+  pkill -f "node server.js" || true
+fi
 
 echo "▶️ 启动当前仓库的 server.js ..."
 nohup node server.js > pantools.log 2>&1 &
-sleep 2
+sleep 3
 
 echo "🔍 健康检查..."
-if curl -fsS http://localhost:3000/api/health >/tmp/pantools-health.json; then
+if command -v curl >/dev/null 2>&1 && curl -fsS http://localhost:3000/api/health >/tmp/pantools-health.json; then
   cat /tmp/pantools-health.json
   echo ""
   echo "✅ 服务启动成功"
@@ -33,5 +39,9 @@ if curl -fsS http://localhost:3000/api/health >/tmp/pantools-health.json; then
   echo "🌐 访问地址: http://localhost:3000"
 else
   echo "❌ 服务启动失败，请查看 pantools.log"
+  echo "--- playwright log ---"
+  cat /tmp/pantools-playwright.log 2>/dev/null || true
+  echo "--- server log ---"
+  cat pantools.log 2>/dev/null || true
   exit 1
 fi
