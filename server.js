@@ -29,6 +29,8 @@ function getBuildInfo() {
 
 const BUILD_INFO = getBuildInfo();
 
+const DEFAULT_TARGET_FOLDER_NAME = '资料仓库';
+
 const STORAGE_CONFIG = {
   baidu: {
     name: '百度网盘',
@@ -413,6 +415,56 @@ async function extractSharedFileName(page) {
   return '';
 }
 
+async function ensureQuarkTargetFolder(page, session) {
+  const folderName = DEFAULT_TARGET_FOLDER_NAME;
+
+  const existing = await locateFileInDrive(page, folderName, session, { verifyOnly: true }).catch(() => ({ found: false }));
+  if (existing?.found) {
+    appendLog(session, `已确认目标文件夹存在: ${folderName}`);
+    return { ok: true, folderName, existed: true };
+  }
+
+  const createButtons = ['text=新建文件夹', 'button:has-text("新建文件夹")', 'text=新建'];
+  let createdEntry = await safeClick(page, createButtons, 2000);
+  if (!createdEntry) {
+    createdEntry = await safeClickByText(page, ['新建文件夹', '新建'], session);
+  }
+  if (!createdEntry) {
+    appendLog(session, '未找到新建文件夹入口');
+    return { ok: false, folderName, reason: 'create_button_missing' };
+  }
+
+  await page.waitForTimeout(800);
+  const inputs = [
+    'input[placeholder*="文件夹"]',
+    'input[placeholder*="名称"]',
+    'input[type="text"]'
+  ];
+
+  let filled = false;
+  for (const selector of inputs) {
+    try {
+      const input = page.locator(selector).last();
+      await input.fill(folderName, { timeout: 1500 });
+      filled = true;
+      appendLog(session, `已输入目标文件夹名称: ${folderName}`);
+      break;
+    } catch {}
+  }
+
+  if (!filled) {
+    appendLog(session, '未找到新建文件夹输入框');
+    return { ok: false, folderName, reason: 'folder_input_missing' };
+  }
+
+  let confirmed = await safeClick(page, ['text=确定', 'text=创建', 'button:has-text("确定")'], 1500);
+  if (!confirmed) confirmed = await safeClickByText(page, ['确定', '创建'], session, { exact: false });
+  await page.waitForTimeout(1200);
+
+  appendLog(session, `已尝试创建目标文件夹: ${folderName}`);
+  return { ok: true, folderName, existed: false, confirmed: confirmed || '' };
+}
+
 async function parseTransferSuccessContext(page, session) {
   const openSelectors = [
     'text=查看文件',
@@ -729,6 +781,15 @@ app.post('/api/transfer', async (req, res) => {
     });
     appendLog(session, `开始转存链接: ${shareUrl}`);
 
+    const folderPage = await getOrCreatePage(sessionId, 'sharePage');
+    let targetFolder = null;
+    if (storageType === 'quark') {
+      await folderPage.goto(config.homeUrl, { waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
+      await folderPage.waitForTimeout(2000);
+      targetFolder = await ensureQuarkTargetFolder(folderPage, session);
+      updateSession(sessionId, { targetFolder });
+    }
+
     const page = await getOrCreatePage(sessionId, 'transferPage');
     await page.goto(shareUrl, { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(2000);
@@ -809,6 +870,7 @@ app.post('/api/transfer', async (req, res) => {
       transferVerified,
       transferContext,
       driveCheck,
+      targetFolder,
       transferEvidence: {
         before: beforeTransferEvidence,
         after: afterTransferEvidence,
@@ -867,6 +929,10 @@ app.post('/api/share', async (req, res) => {
 
     const page = await getOrCreatePage(sessionId, 'sharePage');
     let openedFromSuccessPage = { opened: false };
+
+    if (!openedFromSuccessPage.opened && session.targetFolder?.folderName) {
+      appendLog(session, `分享阶段优先检查固定目录: ${session.targetFolder.folderName}`);
+    }
 
     if (session.transferPage && !session.transferPage.isClosed()) {
       appendLog(session, '优先尝试从转存成功页直接进入目标文件');
